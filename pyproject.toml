@@ -1,0 +1,43 @@
+[build-system]
+requires = [
+    "setuptools",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bgshr"
+version = "0.0.1"
+authors = [
+    {name = "Aaron Ragsdale", email = "apragsdale@wisce.edu"},
+    {name = "Gustavo Barroso", email = "gvbarroso@gmail.com"},
+]
+description = "A package for computing BGS effects"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies=[
+    "numpy",
+    "scipy",
+    "pandas",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.cibuildwheel]
+test-requires = "pytest"
+test-command = "pytest {project}/tests"
+build-frontend = "build"
+
+[tool.cibuildwheel.macos]
+build = "cp3{11,12}-*"
+
+[tool.cibuildwheel.linux]
+build = "cp*manylinux*"
+archs = "x86_64"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+]

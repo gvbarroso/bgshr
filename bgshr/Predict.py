@@ -5,139 +5,213 @@ import copy
 
 from . import Util
 
-## TODO: break apart and avoid repeat integrations and calculation, especially when
-## using a DFE
+
 def Bvals(
     xs,
     s,
-    u,
     splines,
+    u=1e-8,
     L=None,
     rmap=None,
+    r=None,
     bmap=None,
     elements=[],
     max_r=0.1,
-    u_vals=None,
-    s_vals=None,
-    r_xs=None,
+    r_dists=None,
+    B_elem=None,
 ):
     """
-    Get predicted reduction for given s-value
+    Get predicted reduction for given s-value, assuming a constant per-base
+    deleterious mutation rate of u within elements.
+
+    If s is a single value, we compute just a single B value reduction array
+    over the xs values. If s is a list of values, we repeat for each s in that
+    list, and return a list of B value recution arrays.
+
+    Then u can also be a scalar or a list of the same length as s.
     """
-    correction = False
-    if bmap is not None:
-        # adjust s in each element, rmap, and u in each element
-        correction = True
-        B_elem = [bmap.integrate(e[0], e[1]) / (e[1] - e[0]) for e in elements]
-    else:
-        B_elem = [1 for e in elements]
+    # Apply interference correction if bmap is provided
+    if B_elem is None:
+        B_elem = _get_B_per_element(bmap, elements)
 
-    if u_vals is None:
-        u_vals = np.sort(list(set([k[0] for k in splines.keys()])))
-    if s_vals is None:
-        s_vals = np.sort(list(set([k[1] for k in splines.keys()])))
-
+    # Get grid of s and u values
+    u_vals = np.sort(list(set([k[0] for k in splines.keys()])))
+    s_vals = np.sort(list(set([k[1] for k in splines.keys()])))
     if len(u_vals) != 1:
         raise ValueError("more than one mutation rate present")
     uL = u_vals[0]
-    B0 = u / uL
 
-    B = np.ones(len(xs))
-    if len(elements) == 0:
-        return B
-
-    if L is None:
-        L = max([xs[-1], elements[-1][1]])
-
+    # Build recombination map if needed
     if rmap is None:
-        warnings.warn("No rmap provided, assuming r=0")
-        rmap = Util.build_uniform_rmap(0)
+        if L is None:
+            L = max([xs[-1], elements[-1][1]])
+        # TODO allow for constant recombination rate, handle with bmap if provided?
+        if r is None:
+            warnings.warn("No recombination rates provided, assuming r=1e-8")
+            r = 1e-8
+        rmap = Util.build_uniform_rmap(r, L)
 
-    # map positions of given x values
-    if r_xs is None:
-        # this can be slow to recompute each time
-        # cache and pass to recursive calls
-        r_xs = np.array([rmap(x) for x in xs])
+    ## TODO: pull the rec map adjustment back inside this function, since
+    ## recursive calls should not recompute distances from the rec map
+
+    # Allow for multiple s values to be computed, to reduce number
+    # of calls to the recombination map when integrating over a DFE
+    if np.isscalar(s):
+        all_s = [s]
     else:
-        assert len(r_xs) == len(xs)
+        all_s = [_ for _ in s]
+    if np.isscalar(u):
+        all_u = [u for _ in all_s]
+    else:
+        all_u = [_ for _ in u]
+    if not len(all_u) == len(all_s):
+        raise ValueError(
+            "list of mutation rates and selection coeffs must be same length"
+        )
 
+    Bs = [np.ones(len(xs)) for s_val in all_s]
+    if len(elements) > 0:
+        if r_dists is None:
+            # recombination distances between each position in xs and element midpoint
+            r_dists = _get_r_dists(xs, elements, rmap)
+
+        for j, (s_val, u_val) in enumerate(zip(all_s, all_u)):
+            u_fac = u_val / uL
+            for i, e in enumerate(elements):
+                # if we correct for local B value, update the s value in this element
+                s_elem = B_elem[i] * s_val
+                if s_elem in s_vals:
+                    # get length of the constrained element
+                    L_elem = e[1] - e[0]
+                    # restrict to distances within the maximum recombination distance
+                    indexes = np.where(r_dists[i] <= max_r)[0]
+                    r_dist = r_dists[i][indexes]
+                    # if we correct for local B, update the effective length of element
+                    L_elem *= B_elem[i]
+                    fac = splines[(uL, s_elem)](r_dist) ** (u_fac * L_elem)
+                    Bs[j][indexes] *= fac
+                else:
+                    # call this function recursively to interpolate between the s-grid
+                    s0, s1, p0, p1 = _get_interpolated_svals(s_elem, s_vals)
+                    # adjust mutation rates by interpolation and any local B correction
+                    u0 = u_val * p0 * B_elem[i]
+                    u1 = u_val * p1 * B_elem[i]
+                    fac0 = Bvals(
+                        xs,
+                        s0,
+                        splines,
+                        u=u0,
+                        L=L,
+                        rmap=rmap,
+                        elements=[e],
+                        max_r=max_r,
+                        r_dists=[r_dists[i]],
+                    )
+                    fac1 = Bvals(
+                        xs,
+                        s1,
+                        splines,
+                        u=u1,
+                        L=L,
+                        rmap=rmap,
+                        elements=[e],
+                        max_r=max_r,
+                        r_dists=[r_dists[i]],
+                    )
+                    Bs[j] *= fac0 * fac1
+
+    if np.isscalar(s):
+        assert len(Bs) == 1
+        return Bs[0]
+    else:
+        return Bs
+
+
+def _get_B_per_element(bmap, elements):
+    if bmap is None:
+        # without bmap, correction factor is 1
+        B_elem = np.ones(len(elements))
+    else:
+        # average B in each element
+        B_elem = np.array(
+            [bmap.integrate(e[0], e[1]) / (e[1] - e[0]) for e in elements]
+        )
+    return B_elem
+
+
+def _get_element_midpoints(elements):
+    x = np.zeros(len(elements))
     for i, e in enumerate(elements):
-        # if we correct for local B value, update the s value in this element
-        s_elem = B_elem[i] * s
-        if s_elem in s_vals:
-            # get lengths, midpoints, and distances for the constrained element
-            mid = np.mean(e)
-            L_elem = e[1] - e[0]
-            r_mid = rmap(mid)
-            r_dists = np.abs(r_xs - r_mid)
-            # restrict to distances within the maximum recombination distance
-            indexes = np.where(r_dists <= max_r)[0]
-            r_dists = r_dists[indexes]
-            # if we correct for local B values, update the effective length of element
-            L_elem *= B_elem[i]
-            fac = splines[(uL, s_elem)](r_dists) ** (B0 * L_elem)
-            B[indexes] *= fac
-        else:
-            # call this function recursively to interpolate between the s-grid
-            s0 = s_vals[np.where(s_elem > s_vals)[0][-1]]
-            s1 = s_vals[np.where(s_elem < s_vals)[0][0]]
-            p1 = (s_elem - s0) / (s1 - s0)
-            p0 = 1 - p1
-            assert 0 < p0 < 1
-            fac0 = Bvals(
-                xs,
-                s0,
-                u * p0 * B_elem[i],
-                splines,
-                L=L,
-                rmap=rmap,
-                elements=[e],
-                max_r=max_r,
-                u_vals=u_vals,
-                s_vals=s_vals,
-                r_xs=r_xs,
-            )
-            fac1 = Bvals(
-                xs,
-                s1,
-                u * p1 * B_elem[i],
-                splines,
-                L=L,
-                rmap=rmap,
-                elements=[e],
-                max_r=max_r,
-                u_vals=u_vals,
-                s_vals=s_vals,
-                r_xs=r_xs,
-            )
-            B *= fac0 * fac1
-    return B
+        x[i] = np.mean(e)
+    return x
+
+
+def _get_r_dists(xs, elements, rmap):
+    # element midpoints
+    x_midpoints = _get_element_midpoints(elements)
+    # get recombination map values
+    r_midpoints = rmap(x_midpoints)
+    r_xs = rmap(xs)
+    r_dists = np.zeros((len(elements), len(xs)))
+    # get recombination fractions
+    for i, r_mid in enumerate(r_midpoints):
+        r_dists[i] = Util.haldane_map_function(np.abs(r_xs - r_mid))
+    return r_dists
+
+
+def _get_interpolated_svals(s_elem, s_vals):
+    s0 = s_vals[np.where(s_elem > s_vals)[0][-1]]
+    s1 = s_vals[np.where(s_elem < s_vals)[0][0]]
+    p1 = (s_elem - s0) / (s1 - s0)
+    p0 = 1 - p1
+    assert 0 < p0 < 1
+    return s0, s1, p0, p1
 
 
 def Bmap(
     xs,
     s,
-    u,
     splines,
+    u=1e-8,
     L=None,
     rmap=None,
     bmap=None,
     elements=[],
     max_r=0.1,
-    u_vals=None,
-    s_vals=None,
 ):
     bs = Bvals(
         xs,
         s,
-        u,
         splines,
+        u=u,
         L=L,
         rmap=rmap,
         bmap=bmap,
         elements=elements,
         max_r=max_r,
-        u_vals=u_vals,
-        s_vals=s_vals,
     )
     return interpolate.CubicSpline(xs, bs, bc_type="natural")
+
+
+#
+# def Bvals_dfe(
+#    xs,
+#    ss,
+#    splines,
+#    u=1e-8,
+#    shape=None,
+#    scale=None,
+#    L=None,
+#    rmap=None,
+#    bmap=None,
+#    elements=[],
+#    max_r=0.1,
+# ):
+#    if shape is None or scale is None:
+#        raise ValueError("must provide gamma dfe shape and scale")
+#
+#    Bs = Bvals(
+#        xs, ss, splines, u=u, L=L, rmap=rmap, bmap=bmap, elements=elements, max_r=max_r
+#    )
+#    B = Util.integrate_gamma_dfe(Bs, ss, shape, scale)
+#    return B

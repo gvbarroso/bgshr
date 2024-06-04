@@ -7,6 +7,7 @@ import numpy as np
 import pandas
 from scipy import interpolate
 from scipy import integrate
+from scipy import stats
 
 
 def load_lookup_table(df_name, sep=","):
@@ -133,6 +134,10 @@ def load_recombination_map(fname, L=None):
     return rmap
 
 
+def haldane_map_function(rs):
+    return 0.5 * (1 - np.exp(-2 * rs))
+
+
 def load_elements(bed_file):
     elem_left = []
     elem_right = []
@@ -169,3 +174,20 @@ def break_up_elements(elements, max_size=500):
         else:
             elements_br.append([l, r])
     return np.array(elements_br)
+
+
+def weights_gamma_dfe(s_vals, shape, scale):
+    assert np.all(s_vals <= 0)
+    s_vals_sorted = np.sort(s_vals)
+    if np.any(s_vals != s_vals_sorted):
+        raise ValueError("selection values are not sorted")
+
+    pdf = stats.gamma.pdf(-s_vals, shape, scale=scale)
+    grid = np.concatenate(([s_vals[0]], s_vals, [s_vals[-1]]))
+    weights = (grid[2:] - grid[:-2]) / 2 * pdf
+    return weights
+
+
+def integrate_with_weights(vals, weights, u_fac=1):
+    out = np.prod([v ** (w * u_fac) for v, w in zip(vals, weights)], axis=0)
+    return out

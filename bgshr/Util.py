@@ -119,14 +119,29 @@ def adjust_recombination_map(rmap, bmap):
 
 def load_recombination_map(fname, L=None):
     """
-    Get positions and rates to build recombination map
+    Get positions and rates to build recombination map.
+
+    If L is not None, we extend the map to L if it is greater than the
+    last point in the input file, or we truncate the map at L if it is
+    less than the last point in the input file.
+
+    If L is not given, the interpolated map does not extend beyond
+    the final data point.
     """
     map_df = pandas.read_csv(fname, sep="\s+")
     pos = np.concatenate(([0], map_df["Position(bp)"]))
     rates = np.concatenate(([0], map_df["Rate(cM/Mb)"])) / 100 / 1e6
     if L is not None:
-        assert L > pos[-1]
-        pos = np.insert(pos, len(pos), L)
+        if L > pos[-1]:
+            pos = np.insert(pos, len(pos), L)
+        elif L < pos[-1]:
+            cutoff = np.where(L < pos)[0][0]
+            pos = pos[:cutoff]
+            pos = np.append(pos, L)
+            rates = rates[:cutoff]
+        else:
+            # L == pos[-1]
+            rates = rates[:-1]
     else:
         rates = rates[:-1]
     assert len(rates) == len(pos) - 1
@@ -135,15 +150,28 @@ def load_recombination_map(fname, L=None):
 
 
 def haldane_map_function(rs):
+    """
+    Returns recombination fraction following Haldan'es map function.
+    """
     return 0.5 * (1 - np.exp(-2 * rs))
 
 
-def load_elements(bed_file):
+def load_elements(bed_file, L=None):
+    """
+    From a bed file, load elements. If L is not None, we exlude regions
+    greater than L, and any region that overlaps with L is truncated at L.
+    """
     elem_left = []
     elem_right = []
     data = pandas.read_csv(bed_file, sep="\t", header=None)
     elem_left = np.array(data[1])
     elem_right = np.array(data[2])
+    if L is not None:
+        to_del = np.where(elem_left >= L)[0]
+        elem_left = np.delete(elem_left, to_del)
+        elem_right = np.delete(elem_right, to_del)
+        to_trunc = np.where(elem_right > L)[0]
+        elem_right[to_trunc] = L
     elements = np.zeros((len(elem_left), 2), dtype=int)
     elements[:, 0] = elem_left
     elements[:, 1] = elem_right

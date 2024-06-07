@@ -117,7 +117,7 @@ def adjust_recombination_map(rmap, bmap):
     return rmap
 
 
-def load_recombination_map(fname, L=None):
+def load_recombination_map(fname, L=None, scaling=1):
     """
     Get positions and rates to build recombination map.
 
@@ -128,14 +128,14 @@ def load_recombination_map(fname, L=None):
     If L is not given, the interpolated map does not extend beyond
     the final data point.
     """
-    map_df = pandas.read_csv(fname, sep="\s+")
+    map_df = pandas.read_csv(fname, sep="\\s+")
     pos = np.concatenate(([0], map_df["Position(bp)"]))
     rates = np.concatenate(([0], map_df["Rate(cM/Mb)"])) / 100 / 1e6
     if L is not None:
         if L > pos[-1]:
             pos = np.insert(pos, len(pos), L)
         elif L < pos[-1]:
-            cutoff = np.where(L < pos)[0][0]
+            cutoff = np.where(L <= pos)[0][0]
             pos = pos[:cutoff]
             pos = np.append(pos, L)
             rates = rates[:cutoff]
@@ -145,7 +145,7 @@ def load_recombination_map(fname, L=None):
     else:
         rates = rates[:-1]
     assert len(rates) == len(pos) - 1
-    rmap = build_recombination_map(pos, rates)
+    rmap = build_recombination_map(pos, rates * scaling)
     return rmap
 
 
@@ -217,5 +217,7 @@ def weights_gamma_dfe(s_vals, shape, scale):
 
 
 def integrate_with_weights(vals, weights, u_fac=1):
+    if len(vals) != len(weights):
+        raise ValueError("values and weights are not same length")
     out = np.prod([v ** (w * u_fac) for v, w in zip(vals, weights)], axis=0)
     return out

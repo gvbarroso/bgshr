@@ -63,16 +63,75 @@ def extend_lookup_table(df_sub, ss):
     for s in ss:
         Bs = reduction_CBGS(s, data["uL"], r_vals)
         data["s"] = s
-        data["Hl"] = 0  ## TODO
+        data["Hl"] = _get_Hl(s, data["Na"], data["uL"])
         Hrs = Bs * data["pi0"]
+        data["piN_pi0"] = data["Hl"] / data["pi0"]
         for r, B, Hr in zip(r_vals, Bs, Hrs):
             data["r"] = r
             data["B"] = B
             data["Hr"] = Hr
-            data["piN_pi0"] = data["Hl"] / data["pi0"]
             data["piN_piS"] = data["Hl"] / data["Hr"]
             new_row = [data[k] for k in df_sub.columns]
             new_data.append(new_row)
     df_new = pandas.DataFrame(new_data, columns=df_sub.columns)
     df_comb = pandas.concat((df_sub, df_new), ignore_index=True)
     return df_comb
+
+
+def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
+    cols = [
+        "Na",
+        "N1",
+        "t",
+        "r",
+        "s",
+        "uL",
+        "Order",
+        "Generation",
+        "Hr",
+        "pi0",
+        "B",
+        "uR",
+        "Hl",
+        "piN_pi0",
+        "piN_piS",
+    ]
+    data = {
+        "Na": Ne,
+        "N1": Ne,
+        "t": 0,
+        "uL": uL,
+        "uR": uR,
+        "Order": 0,
+        "Generation": 0,
+    }
+    data["pi0"] = 2 * data["Na"] * data["uR"]
+    new_data = []
+    for s in ss:
+        if s == 0:
+            Bs = np.ones(len(rs))
+        else:
+            Bs = reduction_CBGS(s, uL, rs)
+        data["s"] = s
+        data["Hl"] = _get_Hl(s, Ne, uL)
+        data["piN_pi0"] = data["Hl"] / data["pi0"]
+        Hrs = Bs * data["pi0"]
+        for r, B, Hr in zip(rs, Bs, Hrs):
+            data["r"] = r
+            data["B"] = B
+            data["Hr"] = Hr
+            data["piN_piS"] = data["Hl"] / data["Hr"]
+            new_row = [data[k] for k in cols]
+            new_data.append(new_row)
+    df_new = pandas.DataFrame(new_data, columns=cols)
+    return df_new
+
+
+def _get_Hl(s, Ne, u):
+    """
+    From integrating Eq. 31 in Evans et al (2007) against `4*Ne*u*x*(1-x)`.
+    """
+    if s == 0:
+        return 2 * Ne * u
+    else:
+        return 4 * Ne * u * np.exp(4 * Ne * s) / (np.exp(4 * Ne * s) - 1) - u / s

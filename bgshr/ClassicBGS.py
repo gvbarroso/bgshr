@@ -1,12 +1,22 @@
 import numpy as np
 import pandas
+from scipy import linalg
 
 from . import Util
 
 
 def reduction_CBGS(s, u, r, L=1):
     """
-    TODO: Is this the Nordborg result?
+    This is the result given by Nordborg using either a diffusion (1996, wich
+    Charlesworth) or a Markov chain (1996) approach.
+
+    :param s: The negative selection coefficient.
+    :param u: The deleterious mutation rate.
+    :param r: The recombination rate between the focal site and the selected
+        locus.
+    :param L: Optionally, a scaling factor for the mutation rate, assuming a
+        non-recombining selected locus of length L, and per-base mutation rate
+        of `u`.
     """
     return np.exp(-u * L / (-s * (1 + r * (1 + s) / -s) ** 2))
 
@@ -15,11 +25,20 @@ def classic_BGS(xs, s, u, L=None, rmap=None, elements=[]):
     """
     Compute classic BGS reduction due to selection in constrained elements.
 
-    B values are computed from the midpoints of elements. If elements are large,
-    consider splitting into smaller regions using `Util.xzy()`.
+    B values are computed from the midpoints of elements. If elements are
+    large, consider splitting into smaller regions using `Util.xzy()`.
 
-    :param xs:
-    :param elements: A (sorted) list of non-overlapping [l, r] regions
+    THis assumes that we are at steady state.
+
+    :param xs: An arary of positions to compute B-values at.
+    :param s: The selection coefficient for each deleterious mutation.
+    :param u: Optional, the length of the sequence. If it is not given, we set
+        it to the largest value found in `xs` or the end of the final element,
+        whichever is larger.
+    :rmap: An interpolated recombination map funcion. If a recombination map
+        is not provided, we assume the region is non-recombining.
+    :param elements: A (sorted) list of non-overlapping [l, r] regions defining
+        selected elements.
     """
     B = np.ones(len(xs))
     if len(elements) == 0:
@@ -135,3 +154,114 @@ def _get_Hl(s, Ne, u):
         return 2 * Ne * u
     else:
         return 4 * Ne * u * np.exp(4 * Ne * s) / (np.exp(4 * Ne * s) - 1) - u / s
+
+
+###################################################################
+# Functions to compute classic BGS predictions with size changes. #
+###################################################################
+
+
+def _sub_intensity_matrix(N_epoch, u, r, s, Ne):
+    """
+    Given in Nordborg (1997), this is the sub-intensity matrix for the
+    structured coalescence model with background selection. It has been
+    adjusted to allow for different population size in a given epoch
+    from the Ne used to scale time.
+    """
+    q = u / -s
+    p = 1 - q
+    b12 = q * r
+    b21 = p * (-s + r)
+    nu = N_epoch / Ne  # size relative to Ne
+    S = np.array(
+        [
+            [-4 * Ne * b12 - 1 / (nu * p), 4 * Ne * b12, 0],
+            [2 * Ne * b21, -2 * Ne * b12 - 2 * Ne * b21, 2 * Ne * b12],
+            [0, 4 * Ne * b21, -4 * Ne * b21 - 1 / (nu * q)],
+        ]
+    )
+    return S
+
+
+def _probability_absorption(N_epoch, u, r, s, Ne, gens):
+    """
+    Time is measured in units of 2Ne generations. This returns the probability
+    of coalescence in the structured coalescent model for BGS in an epoch of a
+    given size.
+    """
+    t = gens / 2 / Ne
+    S = _sub_intensity_matrix(N_epoch, u, r, s, Ne)
+    q = u / -s
+    p = 1 - q
+    alpha = np.array([p ** 2, 2 * p * q, q ** 2])
+    return 1 - alpha.dot(linalg.expm(S * t)).dot([1, 1, 1])
+
+
+def _bgs_coalescent_rate(u, r, s, nu):
+    """
+    The parameter lambda in Nordborg (1997). The parameter `nu` is the relative
+    size of the epoch compared to a reference Ne.
+    """
+    q = u / -s
+    p = 1 - q
+    b12 = q * r
+    b21 = p * (-s + r)
+    return b21 ** 2 / (b12 + b21) ** 2 / p / nu + b12 ** 2 / (b12 + b21) ** 2 / q / nu
+
+
+def expected_tmrca_n_epoch_neutral(Ns, Ts):
+    """
+    Ns and Ts are vectors of the same length, specifying (piecewise constant)
+    population sizes and epoch break points. `Ns` and `Ts` must have the same
+    length, and time is measured in generations into the past. The first entry
+    in `Ts` should be zero, and values should be monotonically increasing and
+    not include infinity.  We assume the last entry in `Ns` specifies the
+    steady-state population size prior to any size changes in the past.
+    """
+    p_coal = 0
+    ET = 0
+    for N, T0, T1 in zip(Ns, Ts[:-1], Ts[1:]):
+        gens = T1 - T0
+        # probability of coalescence within this epoch
+        p_coal_epoch = 1 - np.exp(-gens / 2 / N)
+        # weighted by the probability that we haven't coalescece before this epoch
+        epoch_weight = p_coal_epoch * (1 - p_coal)
+        p_coal += epoch_weight
+        # expected TMRCA conditional on coalescing within this epoch
+        ET_cond = 2 * N - gens * (1 - p_coal_epoch) / p_coal_epoch
+        # add to ET
+        ET += epoch_weight * (T0 + ET_cond)
+    # final epoch extending to infinity
+    assert p_coal < 1
+    ET += (1 - p_coal) * (Ts[-1] + 2 * Ns[-1])
+    return ET
+
+
+def expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s):
+    p_coal = 0
+    ET = 0
+    Ne = Ns[-1]
+    for N, T0, T1 in zip(Ns, Ts[:-1], Ts[1:]):
+        gens = T1 - T0
+        # probability of coalescence within this epoch
+        p_coal_epoch = _probability_absorption(N, u, r, s, Ne, gens)
+        # weighted by the probability that we haven't coalescece before this epoch
+        epoch_weight = p_coal_epoch * (1 - p_coal)
+        p_coal += epoch_weight
+        # expected TMRCA conditional on coalescing within this epoch
+        ET_cond = (
+            2 * Ne / _bgs_coalescent_rate(u, r, s, N / Ne)
+            - gens * (1 - p_coal_epoch) / p_coal_epoch
+        )
+        # add to ET
+        ET += epoch_weight * (T0 + ET_cond)
+    # final epoch extending to infinity
+    assert p_coal < 1
+    ET += (1 - p_coal) * (Ts[-1] + 2 * Ne / _bgs_coalescent_rate(u, r, s, 1))
+    return ET
+
+
+def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1):
+    TBGS = expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s)
+    Tneu = expected_tmrca_n_epoch_neutral(Ns, Ts)
+    return (TBGS / Tneu) ** L

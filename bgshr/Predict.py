@@ -28,7 +28,8 @@ def Bvals(
     over the xs values. If s is a list of values, we repeat for each s in that
     list, and return a list of B value recution arrays.
 
-    Then u can also be a scalar or a list of the same length as s.
+    The mutation rate(s) u can be a single scalar or a list the length of
+    elements, in which case each element has its own average mutation rate.
     """
     # Apply interference correction if bmap is provided
     if B_elem is None:
@@ -60,14 +61,13 @@ def Bvals(
         all_s = [s]
     else:
         all_s = [_ for _ in s]
+    # Each element could have its own average mutation rate
     if np.isscalar(u):
-        all_u = [u for _ in all_s]
+        all_u = [u for _ in elements]
     else:
         all_u = [_ for _ in u]
-    if not len(all_u) == len(all_s):
-        raise ValueError(
-            "list of mutation rates and selection coeffs must be same length"
-        )
+    if not len(all_u) == len(elements):
+        raise ValueError("list of mutation rates and elements must be same length")
 
     Bs = [np.ones(len(xs)) for s_val in all_s]
     if len(elements) > 0:
@@ -75,27 +75,27 @@ def Bvals(
             # recombination distances between each position in xs and element midpoint
             r_dists = _get_r_dists(xs, elements, rmap)
 
-        for j, (s_val, u_val) in enumerate(zip(all_s, all_u)):
-            u_fac = u_val / uL
-            for i, e in enumerate(elements):
+        for j, s_val in enumerate(all_s):
+            for i, (e, u_val) in enumerate(zip(elements, all_u)):
                 # if we correct for local B value, update the s value in this element
+                u_elem = B_elem[i] * u_val
                 s_elem = B_elem[i] * s_val
+                # scalar factor to account for differences btw input u and lookup table
+                u_fac = u_elem / uL
                 if s_elem in s_vals:
                     # get length of the constrained element
                     L_elem = e[1] - e[0]
                     # restrict to distances within the maximum recombination distance
                     indexes = np.where(r_dists[i] <= max_r)[0]
                     r_dist = r_dists[i][indexes]
-                    # if we correct for local B, update the effective length of element
-                    L_elem *= B_elem[i]
                     fac = splines[(uL, s_elem)](r_dist) ** (u_fac * L_elem)
                     Bs[j][indexes] *= fac
                 else:
                     # call this function recursively to interpolate between the s-grid
                     s0, s1, p0, p1 = _get_interpolated_svals(s_elem, s_vals)
                     # adjust mutation rates by interpolation and any local B correction
-                    u0 = u_val * p0 * B_elem[i]
-                    u1 = u_val * p1 * B_elem[i]
+                    u0 = u_val * B_elem[i] * p0
+                    u1 = u_val * B_elem[i] * p1
                     fac0 = Bvals(
                         xs,
                         s0,

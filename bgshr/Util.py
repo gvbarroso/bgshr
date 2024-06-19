@@ -50,6 +50,9 @@ def generate_cubic_splines(df_sub):
             df_s_u = df_sub[(df_sub["s"] == s) & (df_sub["uR"] == u)]
             rs = np.array(df_s_u["r"])
             Bs = np.array(df_s_u["B"])
+            inds = np.argsort(rs)
+            rs = rs[inds]
+            Bs = Bs[inds]
             splines[key] = interpolate.CubicSpline(rs, Bs, bc_type="natural")
 
     return u_vals, s_vals, splines

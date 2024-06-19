@@ -98,6 +98,11 @@ def extend_lookup_table(df_sub, ss):
 
 
 def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
+    """
+    Given a list of selection coefficients and rcombination rates, build a
+    a diversity-reduction lookup table using just classic background
+    selected theory.
+    """
     cols = [
         "Na",
         "N1",
@@ -238,6 +243,21 @@ def expected_tmrca_n_epoch_neutral(Ns, Ts):
 
 
 def expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s):
+    """
+    Given a piecewise-constant population size history, get the expected TMRCA,
+    in units of Ne generations. Ne is taken to be the size from the most
+    ancient epoch. The expected TMRCA under classic BGS is an extension of the
+    result from Nordborg (1997), conditioning on coalescence occurring within a
+    given epoch, and then weighting total contribution to TMRCA across
+    probability of coalescence occurring within each epoch.
+
+    Ns and Ts must be the same length, and Ts must start at zero and be
+    monotonically increasing. Then the size between Ts[0] and Ts[1] is
+    Ns[0], the size between Ts[1] and Ts[2] is Ns[1], and so on. The final
+    epoch estends from Ts[-1] to infinity, and has size Ns[-1] (== Ne).
+    """
+    if len(Ns) != len(Ts):
+        raise ValueError("Ns and Ts must be the same length")
     p_coal = 0
     ET = 0
     Ne = Ns[-1]
@@ -262,6 +282,89 @@ def expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s):
 
 
 def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1):
+    """
+    Expected B-value (diversity reduction) for a size change history under
+    classical BGS theory.
+
+    Ns and Ts must be the same length, and Ts must start at zero and be
+    monotonically increasing. Then the size between Ts[0] and Ts[1] is
+    Ns[0], the size between Ts[1] and Ts[2] is Ns[1], and so on. The final
+    epoch estends from Ts[-1] to infinity, and has size Ns[-1] (== Ne).
+    """
     TBGS = expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s)
     Tneu = expected_tmrca_n_epoch_neutral(Ns, Ts)
     return (TBGS / Tneu) ** L
+
+
+def _shift_Ns_Ts(Ns, Ts, gen):
+    ## TODO: this is not elegant, and not tested
+    coal_gen = Ts[-1] - gen
+    if coal_gen >= Ts[-1]:
+        return [Ns[-1]], [0]
+    # shift time as needed
+    Ns_gen = []
+    Ts_gen = []
+    for i, (N, T0, T1) in enumerate(zip(Ns[:-1], Ts[:-1], Ts[1:])):
+        if T0 >= coal_gen:
+            Ns_gen.append(N)
+            Ts_gen.append(T0 - coal_gen)
+        elif T1 > coal_gen:
+            Ns_gen.append(N)
+            Ts_gen.append(0)
+    Ns_gen.append(Ns[-1])
+    Ts_gen.append(Ts[-1] - coal_gen)
+    return Ns_gen, Ts_gen
+
+
+def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-8):
+    cols = [
+        "Na",
+        "N1",
+        "t",
+        "r",
+        "s",
+        "uL",
+        "Order",
+        "Generation",
+        "Hr",
+        "pi0",
+        "B",
+        "uR",
+        "Hl",
+        "piN_pi0",
+        "piN_piS",
+    ]
+    Ne = Ns[-1]
+    if generations is None:
+        generations = [Ts[-1]]
+
+    data = {
+        "Na": Ne,
+        "N1": Ne,
+        "t": 0,
+        "uL": uL,
+        "uR": uR,
+        "Order": 0,
+    }
+    new_data = []
+    for gen in generations:
+        data["Generation"] = gen
+        Ns_gen, Ts_gen = _shift_Ns_Ts(Ns, Ts, gen)
+        # fill in data
+        data["pi0"] = expected_tmrca_n_epoch_neutral(Ns_gen, Ts_gen) * uL
+        for s in ss:
+            data["s"] = s
+            data["Hl"] = np.nan  ## TODO
+            data["piN_pi0"] = data["Hl"] / data["pi0"]
+            for r in rs:
+                if s == 0:
+                    data["B"] = 1
+                else:
+                    data["B"] = reduction_CBGS_n_epoch(Ns_gen, Ts_gen, s, uL, r)
+                data["Hr"] = data["B"] * data["pi0"]
+                data["r"] = r
+                data["piN_piS"] = data["Hl"] / data["Hr"]
+                new_row = [data[k] for k in cols]
+                new_data.append(new_row)
+    df_new = pandas.DataFrame(new_data, columns=cols)
+    return df_new

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas
 from scipy import linalg
+import warnings
 
 from . import Util
 
@@ -166,7 +167,7 @@ def _get_Hl(s, Ne, u):
 ###################################################################
 
 
-def _sub_intensity_matrix(N_epoch, u, r, s, Ne):
+def _sub_intensity_matrix(N_epoch, s, u, r, Ne):
     """
     Given in Nordborg (1997), this is the sub-intensity matrix for the
     structured coalescence model with background selection. It has been
@@ -188,21 +189,21 @@ def _sub_intensity_matrix(N_epoch, u, r, s, Ne):
     return S
 
 
-def _probability_absorption(N_epoch, u, r, s, Ne, gens):
+def _probability_absorption(N_epoch, s, u, r, Ne, gens):
     """
     Time is measured in units of 2Ne generations. This returns the probability
     of coalescence in the structured coalescent model for BGS in an epoch of a
     given size.
     """
     t = gens / 2 / Ne
-    S = _sub_intensity_matrix(N_epoch, u, r, s, Ne)
+    S = _sub_intensity_matrix(N_epoch, s, u, r, Ne)
     q = u / -s
     p = 1 - q
     alpha = np.array([p ** 2, 2 * p * q, q ** 2])
     return 1 - alpha.dot(linalg.expm(S * t)).dot([1, 1, 1])
 
 
-def _bgs_coalescent_rate(u, r, s, nu):
+def _bgs_coalescent_rate(s, u, r, nu):
     """
     The parameter lambda in Nordborg (1997). The parameter `nu` is the relative
     size of the epoch compared to a reference Ne.
@@ -227,6 +228,10 @@ def expected_tmrca_n_epoch_neutral(Ns, Ts):
     ET = 0
     for N, T0, T1 in zip(Ns, Ts[:-1], Ts[1:]):
         gens = T1 - T0
+        if gens < 0:
+            raise ValueError("Ts are not monotonically increasing")
+        if gens == 0:
+            continue
         # probability of coalescence within this epoch
         p_coal_epoch = 1 - np.exp(-gens / 2 / N)
         # weighted by the probability that we haven't coalescece before this epoch
@@ -242,7 +247,7 @@ def expected_tmrca_n_epoch_neutral(Ns, Ts):
     return ET
 
 
-def expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s):
+def expected_tmrca_n_epoch_bgs(Ns, Ts, s, u, r):
     """
     Given a piecewise-constant population size history, get the expected TMRCA,
     in units of Ne generations. Ne is taken to be the size from the most
@@ -263,25 +268,29 @@ def expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s):
     Ne = Ns[-1]
     for N, T0, T1 in zip(Ns, Ts[:-1], Ts[1:]):
         gens = T1 - T0
+        if gens < 0:
+            raise ValueError("Ts are not monotonically increasing")
+        if gens == 0:
+            continue
         # probability of coalescence within this epoch
-        p_coal_epoch = _probability_absorption(N, u, r, s, Ne, gens)
+        p_coal_epoch = _probability_absorption(N, s, u, r, Ne, gens)
         # weighted by the probability that we haven't coalescece before this epoch
         epoch_weight = p_coal_epoch * (1 - p_coal)
         p_coal += epoch_weight
         # expected TMRCA conditional on coalescing within this epoch
         ET_cond = (
-            2 * Ne / _bgs_coalescent_rate(u, r, s, N / Ne)
+            2 * Ne / _bgs_coalescent_rate(s, u, r, N / Ne)
             - gens * (1 - p_coal_epoch) / p_coal_epoch
         )
         # add to ET
         ET += epoch_weight * (T0 + ET_cond)
     # final epoch extending to infinity
     assert p_coal < 1
-    ET += (1 - p_coal) * (Ts[-1] + 2 * Ne / _bgs_coalescent_rate(u, r, s, 1))
+    ET += (1 - p_coal) * (Ts[-1] + 2 * Ne / _bgs_coalescent_rate(s, u, r, 1))
     return ET
 
 
-def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1):
+def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1, scale_mutation=True):
     """
     Expected B-value (diversity reduction) for a size change history under
     classical BGS theory.
@@ -290,10 +299,36 @@ def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1):
     monotonically increasing. Then the size between Ts[0] and Ts[1] is
     Ns[0], the size between Ts[1] and Ts[2] is Ns[1], and so on. The final
     epoch estends from Ts[-1] to infinity, and has size Ns[-1] (== Ne).
+
+    This method can fail when u is small compared to 1/N, especially for large
+    recombination rates. Instead, with scale_mutation=True, we rescale u to be
+    larger (Ne*u ~ O(1)), while ensuring that still u<<s. Then we scale the
+    B value back to the original u value.
+
     """
-    TBGS = expected_tmrca_n_epoch_bgs(Ns, Ts, u, r, s)
+    if -s <= 1 / np.min(Ns):
+        warnings.warn(
+            "N*s is 1 or smaller for some epochs - expect results to be wrong"
+        )
+    if scale_mutation:
+        # this is just a guess
+        u_scale = 1 / np.mean(Ns)
+        scale_fac = u_scale / u
+        TBGS = expected_tmrca_n_epoch_bgs(Ns, Ts, s, u_scale, r)
+    else:
+        TBGS = expected_tmrca_n_epoch_bgs(Ns, Ts, s, u, r)
     Tneu = expected_tmrca_n_epoch_neutral(Ns, Ts)
-    return (TBGS / Tneu) ** L
+    if TBGS < 0:
+        warnings.warn(
+            f"BGS calculation is nonsense - s: {s}, u: {u}, r: {r}, Ns: {Ns}, Ts: {Ts}"
+        )
+    B = TBGS / Tneu
+    if B > 1:
+        # reduction cannot be more than 1 - can occur with weaker selection, large r
+        B = 1
+    if scale_mutation:
+        B = B ** (1 / scale_fac)
+    return B ** L
 
 
 def _shift_Ns_Ts(Ns, Ts, gen):
@@ -340,8 +375,8 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
 
     data = {
         "Na": Ne,
-        "N1": Ne,
-        "t": 0,
+        "N1": Ns[0], ## we need a better way of specifying size change history
+        "t": Ts[-1],  ## in the tables - currently only makes sense for 2 epochs
         "uL": uL,
         "uR": uR,
         "Order": 0,

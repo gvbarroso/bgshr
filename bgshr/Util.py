@@ -47,7 +47,7 @@ def generate_cubic_splines(df_sub):
         for s in s_vals:
             key = (u, s)
             # Subset to given s and u values
-            df_s_u = df_sub[(df_sub["s"] == s) & (df_sub["uR"] == u)]
+            df_s_u = df_sub[(df_sub["s"] == s) & (df_sub["uL"] == u)]
             rs = np.array(df_s_u["r"])
             Bs = np.array(df_s_u["B"])
             inds = np.argsort(rs)
@@ -216,6 +216,7 @@ def weights_gamma_dfe(s_vals, shape, scale):
     pdf = stats.gamma.pdf(-s_vals, shape, scale=scale)
     grid = np.concatenate(([s_vals[0]], s_vals, [s_vals[-1]]))
     weights = (grid[2:] - grid[:-2]) / 2 * pdf
+    weights[0] += 1 - stats.gamma.cdf(-s_vals[0], shape, scale=scale)
     return weights
 
 

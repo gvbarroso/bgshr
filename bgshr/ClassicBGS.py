@@ -105,9 +105,6 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
     selected theory.
     """
     cols = [
-        "Na",
-        "N1",
-        "t",
         "r",
         "s",
         "uL",
@@ -120,11 +117,12 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
         "Hl",
         "piN_pi0",
         "piN_piS",
+        "Ns",
+        "Ts",
     ]
     data = {
-        "Na": Ne,
-        "N1": Ne,
-        "t": 0,
+        "Ns": Ne,
+        "Ts": 0,
         "uL": uL,
         "uR": uR,
         "Order": 0,
@@ -311,8 +309,9 @@ def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1, scale_mutation=True):
             "N*s is 1 or smaller for some epochs - expect results to be wrong"
         )
     if scale_mutation:
-        # this is just a guess
-        u_scale = 1 / np.mean(Ns)
+        # scale mutation to be equal to the ancestral Ne, which should be
+        # reasonable if population sizes do not fluctuate dramatically
+        u_scale = 1 / np.mean(Ns[-1])
         scale_fac = u_scale / u
         TBGS = expected_tmrca_n_epoch_bgs(Ns, Ts, s, u_scale, r)
     else:
@@ -324,7 +323,8 @@ def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1, scale_mutation=True):
         )
     B = TBGS / Tneu
     if B > 1:
-        # reduction cannot be more than 1 - can occur with weaker selection, large r
+        # reduction cannot be larger than 1, which can
+        # occur with weaker selection, large r
         B = 1
     if scale_mutation:
         B = B ** (1 / scale_fac)
@@ -332,30 +332,22 @@ def reduction_CBGS_n_epoch(Ns, Ts, s, u, r, L=1, scale_mutation=True):
 
 
 def _shift_Ns_Ts(Ns, Ts, gen):
-    ## TODO: this is not elegant, and not tested
-    coal_gen = Ts[-1] - gen
-    if coal_gen >= Ts[-1]:
-        return [Ns[-1]], [0]
-    # shift time as needed
     Ns_gen = []
     Ts_gen = []
     for i, (N, T0, T1) in enumerate(zip(Ns[:-1], Ts[:-1], Ts[1:])):
-        if T0 >= coal_gen:
+        if T0 >= gen:
             Ns_gen.append(N)
-            Ts_gen.append(T0 - coal_gen)
-        elif T1 > coal_gen:
+            Ts_gen.append(T0 - gen)
+        elif T1 > gen:
             Ns_gen.append(N)
             Ts_gen.append(0)
     Ns_gen.append(Ns[-1])
-    Ts_gen.append(Ts[-1] - coal_gen)
+    Ts_gen.append(Ts[-1] - gen)
     return Ns_gen, Ts_gen
 
 
 def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-8):
     cols = [
-        "Na",
-        "N1",
-        "t",
         "r",
         "s",
         "uL",
@@ -368,23 +360,31 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
         "Hl",
         "piN_pi0",
         "piN_piS",
+        "Ns",  # list of population sizs from present to past
+        "Ts",  # list of epoch time points from 0 to past
     ]
+    if len(Ns) != len(Ts):
+        raise ValueError("Ns and Ts must be the same length")
+    if Ts[0] != 0:
+        raise ValueError("Ts must start at time zero (present time)")
+
     Ne = Ns[-1]
     if generations is None:
-        generations = [Ts[-1]]
+        generations = [0]
 
+    Nstring = ";".join([str(N) for N in Ns])
+    Tstring = ";".join([str(T) for T in Ts])
     data = {
-        "Na": Ne,
-        "N1": Ns[0], ## we need a better way of specifying size change history
-        "t": Ts[-1],  ## in the tables - currently only makes sense for 2 epochs
+        "Ns": Nstring,
+        "Ts": Tstring,
         "uL": uL,
         "uR": uR,
         "Order": 0,
     }
     new_data = []
     for gen in generations:
-        data["Generation"] = gen
         Ns_gen, Ts_gen = _shift_Ns_Ts(Ns, Ts, gen)
+        data["Generation"] = gen
         # fill in data
         data["pi0"] = expected_tmrca_n_epoch_neutral(Ns_gen, Ts_gen) * uL
         for s in ss:

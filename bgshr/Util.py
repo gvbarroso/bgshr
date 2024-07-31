@@ -15,10 +15,26 @@ def load_lookup_table(df_name, sep=","):
     return df
 
 
-def subset_lookup_table(df, Na=10000, uL=1e-8, generation=0):
-    df_sub = df[
-        (df["Na"] == 10000) & (df["uL"] == uL) & (df["Generation"] == generation)
-    ]
+def subset_lookup_table(df, generation=0, Ns=None, Ts=None, uL=None):
+    if type(Ns) == list:
+        raise ValueError("Need to implement")
+    if type(Ts) == list:
+        raise ValueError("Need to implement")
+    
+    df_sub = df[df["Generation"] == generation]
+    if Ns is not None:
+        df_sub = df_sub[df_sub["Ns"] == Ns]
+    if Ts is not None:
+        df_sub = df_sub[df_sub["Ts"] == Ts]
+    if uL is not None:
+        df_sub = df_sub[df_sub["uL"] == uL]
+
+    if len(np.unique(df_sub["uL"])) != 1:
+        raise ValueError("Require a single uL value - please specify")
+    if len(np.unique(df_sub["Ns"])) != 1:
+        raise ValueError("Require a single Ns history")
+    if len(np.unique(df_sub["Ts"])) != 1:
+        raise ValueError("Require a single Ts history")
     return df_sub
 
 
@@ -32,10 +48,24 @@ def generate_cubic_splines(df_sub):
     This function returns the (sorted) arrays of uL and s and the
     dictionary of cubic spline functions with keys (uL, s).
     """
-    # Check that only
-    assert len(np.unique(df_sub["Na"])) == 1
+    # Check that only a single entry exists for each item
+    all_Ns = np.unique(df_sub["Ns"])
+    if not len(all_Ns) == 1:
+        all_Ns_split = [[float(_) for _ in Ns.split(";")] for Ns in all_Ns]
+        assert len(np.unique([len(_) for _ in all_Ns_split])) == 1
+        for vals in zip(np.transpose(all_Ns_split)):
+            assert len(np.unique(vals)) == 1
+
+    all_Ts = np.unique(df_sub["Ts"])
+    if not len(all_Ts) == 1:
+        all_Ts_split = [[float(_) for _ in Ts.split(";")] for Ts in all_Ts]
+        assert len(np.unique([len(_) for _ in all_Ts_split])) == 1
+        for vals in zip(np.transpose(all_Ts_split)):
+            assert len(np.unique(vals)) == 1
+ 
     assert len(np.unique(df_sub["uR"])) == 1
-    assert len(np.unique(df_sub["t"])) == 1
+    assert len(np.unique(df_sub["uL"])) == 1
+    assert len(np.unique(df_sub["Generation"])) == 1
 
     # Get arrays of selection and mutation values
     s_vals = np.array(sorted(list(set(df_sub["s"]))))

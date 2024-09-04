@@ -69,21 +69,37 @@ def extend_lookup_table(df_sub, ss):
     r_vals = np.array(sorted(list(set(df_sub["r"]))))
     cols = df_sub.columns
     data = {
-        "Na": np.unique(df_sub["Na"])[0],
-        "N1": np.unique(df_sub["Na"])[0],
-        "t": np.unique(df_sub["t"])[0],
+        "Ns": np.unique(df_sub["Ns"])[0],
+        "Ts": np.unique(df_sub["Ts"])[0],
         "uL": np.unique(df_sub["uL"])[0],
         "uR": np.unique(df_sub["uR"])[0],
         "Order": 0,
         "Generation": 0,
+        "pi0": np.unique(df_sub["pi0"])
     }
-    data["pi0"] = 2 * data["Na"] * data["uR"]
+
+    #Nanc = []
+    #if type(data["Ns"]) is str:
+    #    Nvec = np.unique(np.array(data["Ns"]))[0].split(";") 
+    #    Nanc = Nvec[len(Nvec)-1]
+    #else: # eq. demography and single Ns has been converted
+    #    Nanc = data["Ns"]
+
+    #data["pi0"] = 2 * Nanc * data["uR"]
 
     new_data = []
     for s in ss:
         Bs = reduction_CBGS(s, data["uL"], r_vals)
         data["s"] = s
-        data["Hl"] = _get_Hl(s, data["Na"], data["uL"])
+    
+        Nanc = []
+        if type(data["Ns"]) is str:
+            Nvec = np.unique(np.array(data["Ns"]))[0].split(";")
+            Nanc = Nvec[len(Nvec)-1]
+        else: # eq. demography and single Ns has been converted
+            Nanc = data["Ns"]
+
+        data["Hl"] = _get_Hl(s, Nanc, data["uL"])
         Hrs = Bs * data["pi0"]
         data["piN_pi0"] = data["Hl"] / data["pi0"]
         for r, B, Hr in zip(r_vals, Bs, Hrs):
@@ -100,7 +116,7 @@ def extend_lookup_table(df_sub, ss):
 
 def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
     """
-    Given a list of selection coefficients and rcombination rates, build a
+    Given a list of selection coefficients and recombination rates, build a
     a diversity-reduction lookup table using just classic background
     selected theory.
     """
@@ -128,7 +144,10 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
         "Order": 0,
         "Generation": 0,
     }
-    data["pi0"] = 2 * data["Na"] * data["uR"]
+
+    # accessing Ns (N ) is safe here (eq. demography)
+    data["pi0"] = 2 * data["Ns"] * data["uR"]
+
     new_data = []
     for s in ss:
         if s == 0:

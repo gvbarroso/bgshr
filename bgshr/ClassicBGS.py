@@ -75,7 +75,7 @@ def extend_lookup_table(df_sub, ss):
         "uR": np.unique(df_sub["uR"])[0],
         "Order": 0,
         "Generation": 0,
-        "pi0": np.unique(df_sub["pi0"])
+        "pi0": np.unique(df_sub["pi0"][0])
     }
 
     #Nanc = []
@@ -145,7 +145,7 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
         "Generation": 0,
     }
 
-    # accessing Ns (N ) is safe here (eq. demography)
+    # accessing Ns (Ne) is safe here (eq. demography)
     data["pi0"] = 2 * data["Ns"] * data["uR"]
 
     new_data = []

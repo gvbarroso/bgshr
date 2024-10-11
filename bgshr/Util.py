@@ -3,6 +3,8 @@ Utility functions for `bgshr`, including recombination map handling, reading
 input files, and handling input data in lookup tables.
 """
 
+from datetime import datetime
+import gzip
 import numpy as np
 import pandas
 from scipy import interpolate
@@ -182,9 +184,38 @@ def load_recombination_map(fname, L=None, scaling=1):
     return rmap
 
 
+def load_bedgraph(fname, sep=",", L=None, scaling=1):
+    """
+    Get positions and rates to build rate map.
+    If L is not None, we extend the map to L if it is greater than the
+    last point in the input file, or we truncate the map at L if it is
+    less than the last point in the input file.
+    If L is not given, the interpolated map does not extend beyond
+    the final data point.
+    """
+    map_df = pandas.read_csv(fname, sep=sep)
+    ends = np.concatenate(([0], map_df["end"]))
+    rates = np.concatenate(([0], map_df[map_df.columns[3]]))
+    if L is not None:
+        if L > ends[-1]:
+            ends = np.insert(ends, len(ends), L)
+        elif L < ends[-1]:
+            cutoff = np.where(L <= ends)[0][0]
+            ends = ends[:cutoff]
+            ends = np.append(ends, L)
+            rates = rates[:cutoff]
+        else:
+            rates = rates[:-1]
+    else:
+        rates = rates[:-1]
+    assert len(rates) == len(ends) - 1
+    ratemap = build_recombination_map(ends, rates * scaling)
+    return ratemap
+
+
 def haldane_map_function(rs):
     """
-    Returns recombination fraction following Haldan'es map function.
+    Returns recombination fraction following Haldane's map function.
     """
     return 0.5 * (1 - np.exp(-2 * rs))
 
@@ -210,6 +241,27 @@ def load_elements(bed_file, L=None):
     elements[:, 1] = elem_right
     return elements
 
+def get_elements(df, L=None):
+    """
+    From a bed file, load elements. If L is not None, we exlude regions
+    greater than L, and any region that overlaps with L is truncated at L.
+    """
+    elem_left = []
+    elem_right = []
+    df_sub = df[df["selected"] == 1] # select only exons
+
+    elem_left = np.array(df_sub["start"])
+    elem_right = np.array(df_sub["end"])
+    if L is not None:
+        to_del = np.where(elem_left >= L)[0]
+        elem_left = np.delete(elem_left, to_del)
+        elem_right = np.delete(elem_right, to_del)
+        to_trunc = np.where(elem_right > L)[0]
+        elem_right[to_trunc] = L
+    elements = np.zeros((len(elem_left), 2), dtype=int)
+    elements[:, 0] = elem_left
+    elements[:, 1] = elem_right
+    return elements
 
 def collapse_elements(elements):
     elements_comb = []
@@ -255,3 +307,159 @@ def integrate_with_weights(vals, weights, u_fac=1):
         raise ValueError("values and weights are not same length")
     out = np.prod([v ** (w * u_fac) for v, w in zip(vals, weights)], axis=0)
     return out
+
+
+def _get_time():
+    """
+    Get a string representing the date and time in mm-dd-yy format.
+    """
+    return '[' + datetime.strftime(datetime.now(), '%m-%d-%y %H:%M:%S') + ']'
+
+
+def resolve_elements(element_arrs, L=None):
+    """
+    Resolve overlaps between classes of elements in a brute-force manner, 
+    using order in the list `element_arrs` to determine priority.
+
+    Where overlap exists between arrays, the lower-priority array has its
+    overlapping sites excised. 
+    """
+    if not L:
+        L = max(e[-1, 1] for e in element_arrs)
+    covered = np.zeros(L)
+    resolved_arrs = []
+    for elements in element_arrs:
+        mask = regions_to_mask(elements, L=L)
+        overlaps = np.logical_and(mask == 0, covered == 1)
+        print(_get_time(), f'eliminated {overlaps.sum()} overlaps')
+        mask[overlaps] = 1
+        resolved_arrs.append(mask_to_regions(mask))
+        covered[~mask] += 1
+    assert not np.any(covered > 1)
+    return resolved_arrs
+
+
+def read_bedgraph(fname, sep=','):
+    """
+    From a bedgraph-format file, read and return chromosome number(s), an 
+    array of genomic regions and a dictionary of data columns. 
+
+    If the file has one unique chromosome number, returns it as a string of
+    the form `chr00`; if there are several, returns an array of string
+    chromosome numbers of this form for each row.
+    Possible file extensions include but are not limited to .bedgraph, .csv,
+    and .tsv, with column seperator determined by the `sep` argument.
+    """
+    open_func = gzip.open if fname.endswith('.gz') else open
+    with open_func(fname, 'rb') as file:
+        header_line = file.readline().decode().strip().split(sep)
+    # check for proper header format
+    assert header_line[0] in ['chrom', '#chrom']
+    assert header_line[1] in ['chromStart', 'start']
+    assert header_line[2] in ['chromEnd', 'end']
+    fields = header_line[3:]
+    # handle the return of the chromosome number(s)
+    chrom_nums = np.loadtxt(
+        fname, usecols=0, dtype=str, skiprows=1, delimiter=sep
+    )
+    if len(set(chrom_nums)) == 1:
+        ret_chrom = chrom_nums[0]
+    else:
+        # return the whole vector if there are >1 unique chromosome
+        ret_chrom = chrom_nums
+    windows = np.loadtxt(
+        fname, usecols=(1, 2), dtype=int, skiprows=1, delimiter=sep
+    )
+    cols_to_load = tuple(range(3, len(header_line)))
+    arr = np.loadtxt(
+        fname,
+        usecols=cols_to_load,
+        dtype=float,
+        skiprows=1,
+        unpack=True,
+        delimiter=sep
+    )
+    dataT = [arr] if arr.ndim == 1 else [col for col in arr]
+    data = dict(zip(fields, dataT))
+    return ret_chrom, windows, data
+
+
+def write_bedgraph(fname, chrom_num, regions, data, sep=','):
+    """
+    Write a .bedgraph-format file from an array of regions/windows and a 
+    dictionary of data columns.
+    """
+    for field in data:
+        if len(data[field]) != len(regions):
+            raise ValueError(f'data field {data} mismatches region length!')
+    open_func = gzip.open if fname.endswith('.gz') else open
+    fields = list(data.keys())
+    header = sep.join(['#chrom', 'chromStart', 'chromEnd'] + fields) + '\n'
+    with open_func(fname, 'wb') as file:
+        file.write(header.encode())
+        for i, (start, end) in enumerate(regions):
+            ldata = [str(data[field][i]) for field in fields]
+            line = sep.join([chrom_num, str(start), str(end)] + ldata) + '\n'
+            file.write(line.encode())
+    return
+
+
+def regions_to_mask(regions, L=None):
+    """
+    Return a boolean mask array that equals 0 within `regions` and 1 
+    elsewhere.
+    """
+    if L is None:
+        L = regions[-1, 1]
+    mask = np.ones(L, dtype=bool)
+    for (start, end) in regions:
+        if start > L:
+            break
+        if end > L:
+            end = L
+        mask[start:end] = 0
+    return mask
+
+
+def mask_to_regions(mask):
+    """
+    Return an array representing the regions that are not masked in a boolean
+    array (0s).
+    """
+    jumps = np.diff(np.concatenate(([1], mask, [1])))
+    starts = np.where(jumps == -1)[0]
+    ends = np.where(jumps == 1)[0]
+    regions = np.stack([starts, ends], axis=1)
+    return regions
+
+
+def _collapse_elements(elements):
+    """
+    Collapse any overlapping elements in an array together.
+    """
+    return mask_to_regions(regions_to_mask(elements))
+
+
+def write_elements(fname, chrom_num, elements, sep='\t', write_header=True):
+    """
+    Write an array of elements/regions to file in .bed format.
+    """
+    if not isinstance(chrom_num, str): chrom_num = str(chrom_num)
+    open_func = gzip.open if fname.endswith('.gz') else open
+    with open_func(fname, 'wb') as file:
+        if write_header:
+            line = sep.join(['chrom', 'chromStart', 'chromEnd']) + '\n'
+            file.write(line.encode())
+        for (start, end) in elements:
+            line = sep.join([chrom_num, str(start), str(end)]) + '\n'
+            file.write(line.encode())
+    return
+
+
+def setup_windows(size, L, start=0):
+    """
+    Get an array of contiguous windows of uniform size `size`.
+    """
+    edges = np.arange(start + size, L + size, size)
+    _edges = np.concatenate(([start], edges[:-1].repeat(2), [edges[-1]]))
+    return _edges.reshape(-1, 2)

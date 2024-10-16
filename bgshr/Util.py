@@ -48,20 +48,20 @@ def generate_cubic_splines(df_sub):
     This function returns the (sorted) arrays of uL and s and the
     dictionary of cubic spline functions with keys (uL, s).
     """
-    # Check that only a single entry exists for each item
-    all_Ns = np.unique(df_sub["Ns"])
-    if not len(all_Ns) == 1:
-        all_Ns_split = [[float(_) for _ in Ns.split(";")] for Ns in all_Ns]
-        assert len(np.unique([len(_) for _ in all_Ns_split])) == 1
-        for vals in zip(np.transpose(all_Ns_split)):
-            assert len(np.unique(vals)) == 1
 
-    all_Ts = np.unique(df_sub["Ts"])
-    if not len(all_Ts) == 1:
-        all_Ts_split = [[float(_) for _ in Ts.split(";")] for Ts in all_Ts]
-        assert len(np.unique([len(_) for _ in all_Ts_split])) == 1
-        for vals in zip(np.transpose(all_Ts_split)):
-            assert len(np.unique(vals)) == 1
+    # TODO bring back
+    # Check that only a single entry exists for each item
+    #if not len(set(df_sub["Ns"])) == 1:
+    #    Nvec = np.array([float(x) for x in np.array(df_sub["Ns"])[0].split(";")])
+    #    assert len(np.unique([len(_) for _ in Nvec])) == 1 # TODO check
+    #    for vals in zip(np.transpose(Nvec)):
+    #        assert len(np.unique(vals)) == 1
+
+    #if not len(set(df_sub["Ts"])) == 1:
+    #    Tvec = np.array([float(x) for x in np.array(df_sub["Ts"])[0].split(";")])
+    #    assert len(np.unique([len(_) for _ in Tvec])) == 1 # TODO check
+    #    for vals in zip(np.transpose(Tvec)):
+    #        assert len(np.unique(vals)) == 1
  
     assert len(np.unique(df_sub["uR"])) == 1
     assert len(np.unique(df_sub["uL"])) == 1

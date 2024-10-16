@@ -62,44 +62,31 @@ def classic_BGS(xs, s, u, L=None, rmap=None, elements=[]):
     return B
 
 
-def extend_lookup_table(df_sub, ss):
+def extend_lookup_table(df_sub, ss, generation=0):
     """
     Extend a lookup table at present recombination values for given s values.
     """
     r_vals = np.array(sorted(list(set(df_sub["r"]))))
     cols = df_sub.columns
     data = {
-        "Ns": np.unique(df_sub["Ns"])[0],
+        "Ns": np.unique(list(set(df_sub["Ns"])))[0],
         "Ts": np.unique(df_sub["Ts"])[0],
         "uL": np.unique(df_sub["uL"])[0],
         "uR": np.unique(df_sub["uR"])[0],
         "Order": 0,
-        "Generation": 0,
-        "pi0": np.unique(df_sub["pi0"][0])
+        "Generation": generation,
+        "pi0": np.unique(df_sub["pi0"])[0]
     }
-
-    #Nanc = []
-    #if type(data["Ns"]) is str:
-    #    Nvec = np.unique(np.array(data["Ns"]))[0].split(";") 
-    #    Nanc = Nvec[len(Nvec)-1]
-    #else: # eq. demography and single Ns has been converted
-    #    Nanc = data["Ns"]
-
-    #data["pi0"] = 2 * Nanc * data["uR"]
 
     new_data = []
     for s in ss:
         Bs = reduction_CBGS(s, data["uL"], r_vals)
         data["s"] = s
     
-        Nanc = []
-        if type(data["Ns"]) is str:
-            Nvec = np.unique(np.array(data["Ns"]))[0].split(";")
-            Nanc = Nvec[len(Nvec)-1]
-        else: # eq. demography and single Ns has been converted
-            Nanc = data["Ns"]
+        Nvec = np.array([float(x) for x in np.unique(list(set(data["Ns"])))[0].split(";")])
+        Nanc = Nvec[-1]
 
-        data["Hl"] = _get_Hl(s, Nanc, data["uL"])
+        data["Hl"] = _get_Hl(s, Nanc, np.unique(data["uL"])[0])
         Hrs = Bs * data["pi0"]
         data["piN_pi0"] = data["Hl"] / data["pi0"]
         for r, B, Hr in zip(r_vals, Bs, Hrs):
@@ -145,8 +132,7 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
         "Generation": 0,
     }
 
-    # accessing Ns (Ne) is safe here (eq. demography)
-    data["pi0"] = 2 * data["Ns"] * data["uR"]
+    data["pi0"] = 2 * Ne * uR
 
     new_data = []
     for s in ss:

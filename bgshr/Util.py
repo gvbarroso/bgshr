@@ -344,7 +344,7 @@ def filter_elements_by_length(elements, min_length):
     """
     Remove any intervals with length < min_len from an array of elements.
     """
-    above_thresh = np.diff(elements, axis=1) >= min_length
+    above_thresh = np.where(np.diff(elements, axis=1) >= min_length)
     return elements[above_thresh]
 
 

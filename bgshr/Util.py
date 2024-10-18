@@ -241,6 +241,7 @@ def load_elements(bed_file, L=None):
     elements[:, 1] = elem_right
     return elements
 
+
 def get_elements(df, L=None):
     """
     From a bed file, load elements. If L is not None, we exlude regions
@@ -316,7 +317,7 @@ def _get_time():
     return '[' + datetime.strftime(datetime.now(), '%m-%d-%y %H:%M:%S') + ']'
 
 
-def resolve_elements(element_arrs, L=None):
+def resolve_element_overlaps(element_arrs, L=None):
     """
     Resolve overlaps between classes of elements in a brute-force manner, 
     using order in the list `element_arrs` to determine priority.
@@ -337,6 +338,14 @@ def resolve_elements(element_arrs, L=None):
         covered[~mask] += 1
     assert not np.any(covered > 1)
     return resolved_arrs
+
+
+def filter_elements_by_length(elements, min_length):
+    """
+    Remove any intervals with length < min_len from an array of elements.
+    """
+    above_thresh = np.diff(elements, axis=1) >= min_length
+    return elements[above_thresh]
 
 
 def read_bedgraph(fname, sep=','):
@@ -440,7 +449,7 @@ def _collapse_elements(elements):
     return mask_to_regions(regions_to_mask(elements))
 
 
-def write_elements(fname, chrom_num, elements, sep='\t', write_header=True):
+def write_bedfile(fname, chrom_num, regions, sep='\t', write_header=False):
     """
     Write an array of elements/regions to file in .bed format.
     """
@@ -448,9 +457,9 @@ def write_elements(fname, chrom_num, elements, sep='\t', write_header=True):
     open_func = gzip.open if fname.endswith('.gz') else open
     with open_func(fname, 'wb') as file:
         if write_header:
-            line = sep.join(['chrom', 'chromStart', 'chromEnd']) + '\n'
+            line = sep.join(['#chrom', 'chromStart', 'chromEnd']) + '\n'
             file.write(line.encode())
-        for (start, end) in elements:
+        for (start, end) in regions:
             line = sep.join([chrom_num, str(start), str(end)]) + '\n'
             file.write(line.encode())
     return
@@ -463,3 +472,30 @@ def setup_windows(size, L, start=0):
     edges = np.arange(start + size, L + size, size)
     _edges = np.concatenate(([start], edges[:-1].repeat(2), [edges[-1]]))
     return _edges.reshape(-1, 2)
+
+
+def read_bedfile(fname):
+    """
+    This is redundant with functions above, but it also returns the
+    chromosome number which is sometimes useful. 
+    """
+    open_func = gzip.open if fname.endswith('.gz') else open
+    with open_func(fname, 'rb') as file:
+        line0 = file.readline().decode().split()
+    if line0[1].isnumeric() and line0[2].isnumeric():
+        skiprows = 0
+    else:
+        skiprows = 1
+    regions = np.loadtxt(
+        fname, dtype=np.int64, skiprows=skiprows, usecols=(1, 2)
+    )
+    if regions.ndim == 1:
+        regions = regions[np.newaxis]
+    chrom_nums = np.loadtxt(
+        fname, dtype=str, skiprows=skiprows, usecols=0
+    )
+    if len(set(chrom_nums)) == 1:
+        ret_chrom = chrom_nums[-1]
+    else:
+        ret_chrom = chrom_nums
+    return ret_chrom, regions

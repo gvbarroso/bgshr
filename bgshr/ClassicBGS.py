@@ -83,9 +83,13 @@ def extend_lookup_table(df_sub, ss, generation=0):
         Bs = reduction_CBGS(s, data["uL"], r_vals)
         data["s"] = s
     
-        Nvec = np.array([float(x) for x in np.unique(list(set(data["Ns"])))[0].split(";")])
-        Nanc = Nvec[-1]
-
+        Nanc = []
+        if type(data["Ns"]) is str:
+            Nvec = np.unique(np.array(data["Ns"]))[0].split(";")
+            Nanc = Nvec[len(Nvec)-1]
+        else: # eq. demography and single Ns has been converted
+            Nanc = data["Ns"]
+            
         data["Hl"] = _get_Hl(s, Nanc, np.unique(data["uL"])[0])
         Hrs = Bs * data["pi0"]
         data["piN_pi0"] = data["Hl"] / data["pi0"]
@@ -350,7 +354,7 @@ def _shift_Ns_Ts(Ns, Ts, gen):
     Ts_gen.append(Ts[-1] - gen)
     return Ns_gen, Ts_gen
 
-
+# here Ns and Ts are numeric vector, not semi-colon separated vals on a string
 def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-8):
     cols = [
         "r",
@@ -375,7 +379,7 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
 
     Ne = Ns[-1]
     if generations is None:
-        generations = [0]
+        generations = [0] # TODO check
 
     Nstring = ";".join([str(N) for N in Ns])
     Tstring = ";".join([str(T) for T in Ts])
@@ -388,7 +392,7 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
     }
     new_data = []
     for gen in generations:
-        Ns_gen, Ts_gen = _shift_Ns_Ts(Ns, Ts, gen)
+        Ns_gen, Ts_gen = _shift_Ns_Ts(Ns, Ts, gen) # TODO check
         data["Generation"] = gen
         # fill in data
         data["pi0"] = expected_tmrca_n_epoch_neutral(Ns_gen, Ts_gen) * uL

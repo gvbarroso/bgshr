@@ -136,8 +136,9 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
         "Generation": 0,
     }
 
-    data["pi0"] = 2 * Ne * uR
-
+    # accessing Ns (Ne) is safe here (eq. demography)
+    data["pi0"] = 2 * data["Ns"] * data["uR"]
+    
     new_data = []
     for s in ss:
         if s == 0:

@@ -62,30 +62,21 @@ def classic_BGS(xs, s, u, L=None, rmap=None, elements=[]):
     return B
 
 
-def extend_lookup_table(df_sub, ss):
+def extend_lookup_table(df_sub, ss, generation=0):
     """
     Extend a lookup table at present recombination values for given s values.
     """
     r_vals = np.array(sorted(list(set(df_sub["r"]))))
     cols = df_sub.columns
     data = {
-        "Ns": np.unique(df_sub["Ns"])[0],
+        "Ns": np.unique(list(set(df_sub["Ns"])))[0],
         "Ts": np.unique(df_sub["Ts"])[0],
         "uL": np.unique(df_sub["uL"])[0],
         "uR": np.unique(df_sub["uR"])[0],
         "Order": 0,
-        "Generation": 0,
-        "pi0": np.unique(df_sub["pi0"][0])
+        "Generation": generation,
+        "pi0": np.unique(df_sub["pi0"])[0]
     }
-
-    #Nanc = []
-    #if type(data["Ns"]) is str:
-    #    Nvec = np.unique(np.array(data["Ns"]))[0].split(";") 
-    #    Nanc = Nvec[len(Nvec)-1]
-    #else: # eq. demography and single Ns has been converted
-    #    Nanc = data["Ns"]
-
-    #data["pi0"] = 2 * Nanc * data["uR"]
 
     new_data = []
     for s in ss:
@@ -98,8 +89,8 @@ def extend_lookup_table(df_sub, ss):
             Nanc = Nvec[len(Nvec)-1]
         else: # eq. demography and single Ns has been converted
             Nanc = data["Ns"]
-
-        data["Hl"] = _get_Hl(s, Nanc, data["uL"])
+            
+        data["Hl"] = _get_Hl(s, Nanc, np.unique(data["uL"])[0])
         Hrs = Bs * data["pi0"]
         data["piN_pi0"] = data["Hl"] / data["pi0"]
         for r, B, Hr in zip(r_vals, Bs, Hrs):
@@ -147,7 +138,7 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
 
     # accessing Ns (Ne) is safe here (eq. demography)
     data["pi0"] = 2 * data["Ns"] * data["uR"]
-
+    
     new_data = []
     for s in ss:
         if s == 0:
@@ -364,7 +355,7 @@ def _shift_Ns_Ts(Ns, Ts, gen):
     Ts_gen.append(Ts[-1] - gen)
     return Ns_gen, Ts_gen
 
-
+# here Ns and Ts are numeric vector, not semi-colon separated vals on a string
 def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-8):
     cols = [
         "r",
@@ -389,7 +380,7 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
 
     Ne = Ns[-1]
     if generations is None:
-        generations = [0]
+        generations = [0] # TODO check
 
     Nstring = ";".join([str(N) for N in Ns])
     Tstring = ";".join([str(T) for T in Ts])
@@ -402,7 +393,7 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
     }
     new_data = []
     for gen in generations:
-        Ns_gen, Ts_gen = _shift_Ns_Ts(Ns, Ts, gen)
+        Ns_gen, Ts_gen = _shift_Ns_Ts(Ns, Ts, gen) # TODO check
         data["Generation"] = gen
         # fill in data
         data["pi0"] = expected_tmrca_n_epoch_neutral(Ns_gen, Ts_gen) * uL

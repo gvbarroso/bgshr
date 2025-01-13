@@ -40,7 +40,7 @@ def subset_lookup_table(df, generation=0, Ns=None, Ts=None, uL=None):
 
 def generate_cubic_splines(df_sub):
     """
-    df_sub is the dataframe subsetted to a single Na, uR and t
+    df_sub is the dataframe subsetted to a single demography, uR and t
 
     Cubic spline functions are created over r, for each combination of
     uL and s, returning the fractional reduction based on piR and pi0.
@@ -48,21 +48,10 @@ def generate_cubic_splines(df_sub):
     This function returns the (sorted) arrays of uL and s and the
     dictionary of cubic spline functions with keys (uL, s).
     """
-    # Check that only a single entry exists for each item
-    all_Ns = np.unique(df_sub["Ns"])
-    if not len(all_Ns) == 1:
-        all_Ns_split = [[float(_) for _ in Ns.split(";")] for Ns in all_Ns]
-        assert len(np.unique([len(_) for _ in all_Ns_split])) == 1
-        for vals in zip(np.transpose(all_Ns_split)):
-            assert len(np.unique(vals)) == 1
 
-    all_Ts = np.unique(df_sub["Ts"])
-    if not len(all_Ts) == 1:
-        all_Ts_split = [[float(_) for _ in Ts.split(";")] for Ts in all_Ts]
-        assert len(np.unique([len(_) for _ in all_Ts_split])) == 1
-        for vals in zip(np.transpose(all_Ts_split)):
-            assert len(np.unique(vals)) == 1
- 
+    # Check that only a single entry exists for each item
+    assert len(np.unique(np.array(df_sub["Ts"]))) == 1
+    assert len(np.unique(np.array(df_sub["Ns"]))) == 1
     assert len(np.unique(df_sub["uR"])) == 1
     assert len(np.unique(df_sub["uL"])) == 1
     assert len(np.unique(df_sub["Generation"])) == 1
@@ -181,10 +170,37 @@ def load_recombination_map(fname, L=None, scaling=1):
     rmap = build_recombination_map(pos, rates * scaling)
     return rmap
 
+def load_bedgraph(fname, sep=",", L=None, scaling=1):
+    """
+    Get positions and rates to build rate map.
+    If L is not None, we extend the map to L if it is greater than the
+    last point in the input file, or we truncate the map at L if it is
+    less than the last point in the input file.
+    If L is not given, the interpolated map does not extend beyond
+    the final data point.
+    """
+    map_df = pandas.read_csv(fname, sep=sep)
+    ends = np.concatenate(([0], map_df["end"]))
+    rates = np.concatenate(([0], map_df[map_df.columns[3]]))
+    if L is not None:
+        if L > ends[-1]:
+            ends = np.insert(ends, len(ends), L)
+        elif L < ends[-1]:
+            cutoff = np.where(L <= ends)[0][0]
+            ends = ends[:cutoff]
+            ends = np.append(ends, L)
+            rates = rates[:cutoff]
+        else:
+            rates = rates[:-1]
+    else:
+        rates = rates[:-1]
+    assert len(rates) == len(ends) - 1
+    ratemap = build_recombination_map(ends, rates * scaling)
+    return ratemap
 
 def haldane_map_function(rs):
     """
-    Returns recombination fraction following Haldan'es map function.
+    Returns recombination fraction following Haldane's map function.
     """
     return 0.5 * (1 - np.exp(-2 * rs))
 
@@ -210,6 +226,27 @@ def load_elements(bed_file, L=None):
     elements[:, 1] = elem_right
     return elements
 
+def get_elements(df, L=None):
+    """
+    From a bed file, load elements. If L is not None, we exlude regions
+    greater than L, and any region that overlaps with L is truncated at L.
+    """
+    elem_left = []
+    elem_right = []
+    df_sub = df[df["selected"] == 1] # select only exons
+
+    elem_left = np.array(df_sub["start"])
+    elem_right = np.array(df_sub["end"])
+    if L is not None:
+        to_del = np.where(elem_left >= L)[0]
+        elem_left = np.delete(elem_left, to_del)
+        elem_right = np.delete(elem_right, to_del)
+        to_trunc = np.where(elem_right > L)[0]
+        elem_right[to_trunc] = L
+    elements = np.zeros((len(elem_left), 2), dtype=int)
+    elements[:, 0] = elem_left
+    elements[:, 1] = elem_right
+    return elements
 
 def collapse_elements(elements):
     elements_comb = []

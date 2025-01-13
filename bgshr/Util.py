@@ -40,7 +40,7 @@ def subset_lookup_table(df, generation=0, Ns=None, Ts=None, uL=None):
 
 def generate_cubic_splines(df_sub):
     """
-    df_sub is the dataframe subsetted to a single Na, uR and t
+    df_sub is the dataframe subsetted to a single demography, uR and t
 
     Cubic spline functions are created over r, for each combination of
     uL and s, returning the fractional reduction based on piR and pi0.
@@ -49,20 +49,9 @@ def generate_cubic_splines(df_sub):
     dictionary of cubic spline functions with keys (uL, s).
     """
 
-    # TODO bring back
     # Check that only a single entry exists for each item
-    #if not len(set(df_sub["Ns"])) == 1:
-    #    Nvec = np.array([float(x) for x in np.array(df_sub["Ns"])[0].split(";")])
-    #    assert len(np.unique([len(_) for _ in Nvec])) == 1 # TODO check
-    #    for vals in zip(np.transpose(Nvec)):
-    #        assert len(np.unique(vals)) == 1
-
-    #if not len(set(df_sub["Ts"])) == 1:
-    #    Tvec = np.array([float(x) for x in np.array(df_sub["Ts"])[0].split(";")])
-    #    assert len(np.unique([len(_) for _ in Tvec])) == 1 # TODO check
-    #    for vals in zip(np.transpose(Tvec)):
-    #        assert len(np.unique(vals)) == 1
- 
+    assert len(np.unique(np.array(df_sub["Ts"]))) == 1
+    assert len(np.unique(np.array(df_sub["Ns"]))) == 1
     assert len(np.unique(df_sub["uR"])) == 1
     assert len(np.unique(df_sub["uL"])) == 1
     assert len(np.unique(df_sub["Generation"])) == 1

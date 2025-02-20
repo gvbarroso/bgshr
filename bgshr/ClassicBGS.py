@@ -354,7 +354,7 @@ def _shift_Ns_Ts(Ns, Ts, gen):
             Ns_gen.append(N)
             Ts_gen.append(0)
     Ns_gen.append(Ns[-1])
-    Ts_gen.append(Ts[-1] - gen)
+    Ts_gen.append(max(Ts[-1] - gen, 0))
     return Ns_gen, Ts_gen
 
 # here Ns and Ts are numeric vector, not semi-colon separated vals on a string

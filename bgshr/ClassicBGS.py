@@ -402,7 +402,7 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
         for s in ss:
             data["s"] = s
             # Assume negligible change under size history, if strong enough selection
-            data["Hl"] = _get_Hl(s, Ne, uL)
+            data["Hl"] = _get_Hl(s, Ns[0], uL)
             data["piN_pi0"] = data["Hl"] / data["pi0"]
             for r in rs:
                 if s == 0:

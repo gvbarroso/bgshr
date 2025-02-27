@@ -136,9 +136,8 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
         "Generation": 0,
     }
 
-    # accessing Ns (Ne) is safe here (eq. demography)
-    data["pi0"] = 2 * data["Ns"] * data["uR"]
-    
+    data["pi0"] = 2 * Ne * uR
+
     new_data = []
     for s in ss:
         if s == 0:
@@ -163,6 +162,9 @@ def build_lookup_table(ss, rs, Ne=1e4, uL=1e-8, uR=1e-8):
 def _get_Hl(s, Ne, u):
     """
     From integrating Eq. 31 in Evans et al (2007) against `4*Ne*u*x*(1-x)`.
+
+    Note that here, Hl is defined as 2Nu under neutrality, rather than
+    the typical 4Nu.
     """
     if s == 0:
         return 2 * Ne * u
@@ -352,7 +354,7 @@ def _shift_Ns_Ts(Ns, Ts, gen):
             Ns_gen.append(N)
             Ts_gen.append(0)
     Ns_gen.append(Ns[-1])
-    Ts_gen.append(Ts[-1] - gen)
+    Ts_gen.append(max(Ts[-1] - gen, 0))
     return Ns_gen, Ts_gen
 
 # here Ns and Ts are numeric vector, not semi-colon separated vals on a string
@@ -399,7 +401,8 @@ def build_lookup_table_n_epoch(ss, rs, Ns, Ts, generations=None, uL=1e-8, uR=1e-
         data["pi0"] = expected_tmrca_n_epoch_neutral(Ns_gen, Ts_gen) * uL
         for s in ss:
             data["s"] = s
-            data["Hl"] = np.nan  ## TODO
+            # Assume negligible change under size history, if strong enough selection
+            data["Hl"] = _get_Hl(s, Ns[0], uL)
             data["piN_pi0"] = data["Hl"] / data["pi0"]
             for r in rs:
                 if s == 0:

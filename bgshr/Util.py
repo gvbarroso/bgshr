@@ -374,7 +374,7 @@ def load_u_array(mut_tbl_file, masked=True):
     return windows, num_sites, u_arr
 
 
-def load_del_uL_array(
+def load_del_uL_arrays(
     mut_tbl_file, 
     annot_tbl_files, 
     Ne_scale=1, 
@@ -474,9 +474,9 @@ def load_del_u_arrays(mut_tbl_file, annot_tbl_files, masked=True):
 
 def _get_time():
     """
-    Get a string representing the date and time in mm-dd-yy format.
+    Return a string representing the time and date with yy-mm-dd format.
     """
-    return '[' + datetime.strftime(datetime.now(), '%m-%d-%y %H:%M:%S') + ']'
+    return '[' + datetime.strftime(datetime.now(), '%y-%m-%d %H:%M:%S') + ']'
 
 
 def resolve_element_overlaps(element_arrs, L=None):

@@ -226,10 +226,10 @@ def Bmap(
 
 def load_extended_lookup_table(file):
     """
-    Load a lookup table and extend it using the ClassicBGS module. 
+    Load a lookup table and extend it to include large selection coefficients
+    using the ClassicBGS module. 
 
     :param file: Pathname of lookup table file (.csv). 
-
     :returns: Extended lookup table, array of selection coefficients, dictionary
         of cubic splines, and table Ne. When the table has several size epochs, 
         table Ne is returne as None.
@@ -266,17 +266,43 @@ def load_extended_lookup_table(file):
     return df_extended, s_vals, splines, Ne0
 
 
-def _expected_del_pi0(dfes, s_vals, del_sites_arrs, u_arrs, Ne=None, u0=1e-8):
+def _table_expected_neu_pi0(df, neu_mut):
     """
+    Compute average neutral pi0 in windows by scaling the `Hr` entry in the 
+    lookup table to the local neutral mutation rate.
+    """
+    Hr = np.unique(df[df["s"] == 0]["Hr"])[0]
+    uR = np.unique(df["uR"])[0]
+    neu_pi0 = 2 * Hr * (neu_mut / uR)
+    return neu_pi0
 
-    For use with tables with equilibrium demographic histories.
+
+def _expected_del_pi0(dfes, s_vals, del_sites_arrs, u_arrs, Ne=1e4, u0=1e-8):
     """
+    Compute pi0 for constrained sites, taking direct selection into account.
+    For use with tables with equilibrium demographic histories. Works over
+    one or more classes of constrained element, each with its own DFE.
+
+    :param dfes: List of dictionaries defining DFE parameters for each class of
+        constrained element.
+    :param s_vals: Array of selection coefficients. We compute constrained pi0
+        by calculating Hl (diversity at the selected locus) for each s value,
+        then integrating over these using weights given by the DFEs.
+    :param del_sites_arrs: List of arrays. Each array corresponds to a class
+        of elements, and each element in one array corresponds to a genomic
+        window.
+    :param u_arrs: List of arrays recording average mutation rate for each 
+        class in genomic windows.
+    :param Ne: Effective population size (default 1e4).
+    """
+    if Ne is None: 
+        raise ValueError("You must provide Ne")
     Hls = 2 * np.array([ClassicBGS._get_Hl(s, Ne, u0) for s in s_vals])
     sum_del_pi0 = np.zeros(len(u_arrs[0]), dtype=np.float64)
     for (dfe, u_arr, del_sites) in zip(dfes, u_arrs, del_sites_arrs):
         weights = Util._get_dfe_weights(dfe, s_vals)
         unit_del_pi0 = np.sum(weights * Hls)
-        sum_del_pi0 += unit_del_pi0 * u_arr * del_sites
+        sum_del_pi0 += unit_del_pi0 * del_sites * (u_arr / u0)
     del_pi0 = np.zeros(len(del_sites), dtype=np.float64)
     tot_del_sites = np.sum(del_sites_arrs, axis=0)
     del_pi0[tot_del_sites > 0] = (
@@ -284,11 +310,12 @@ def _expected_del_pi0(dfes, s_vals, del_sites_arrs, u_arrs, Ne=None, u0=1e-8):
     return del_pi0
 
 
-def _tbl_expected_del_pi0(df, dfes, del_sites_arrs, u_arrs):
+def _table_expected_del_pi0(df, dfes, del_sites_arrs, u_arrs):
     """
     Compute window-average pi0 for constrained sites under direct selection from
     values stored in a lookup table. For use with tables with non-equilibrium
-    demographic histories.
+    demographic histories, where scaling table entries by a single value of Ne
+    is erroneous.
     """
     df_sub = df[df["r"] == 0]
     u0 = np.unique(df_sub["uL"])[0]
@@ -298,7 +325,7 @@ def _tbl_expected_del_pi0(df, dfes, del_sites_arrs, u_arrs):
     for (dfe, u_arr, del_sites) in zip(dfes, u_arrs, del_sites_arrs):
         weights = Util._get_dfe_weights(dfe)
         unit_del_pi0 = np.sum(Hls * weights)
-        sum_del_pi0 += unit_del_pi0 * u_arr * del_sites
+        sum_del_pi0 += unit_del_pi0 * del_sites * (u_arr / u0)
     del_pi0 = np.zeros(len(del_sites), dtype=np.float64)
     tot_del_sites = np.sum(del_sites_arrs, axis=0)
     del_pi0[tot_del_sites > 0] = (
@@ -311,8 +338,8 @@ def parallel_Bvals(
     s_vals,
     splines,
     dfes,
-    uL_arrs,
     uL_windows,
+    uL_arrs,
     rmap=None,
     r=None,
     B_map=None,
@@ -320,15 +347,32 @@ def parallel_Bvals(
     tolerance=None,
     df=None,
     block_size=5000,
-    cores=None
+    cores=None,
+    verbose=True
 ):
     """
     Predict a B-landscape at focal neutral sites along a chromosome for one or 
-    more classes of functionally constrained elements.
+    more classes of functionally constrained elements. 
+
+    Requires that constrained sites are aggregated together into an array of 
+    shared genomic windows `uL_windows`. The intensity of deleterious mutation
+    (e.g. the number of constrained sites times the average deleterious mutation 
+    rate) in each window is given by `uL_arrs`. This is a list of arrays, where
+    each array corresponds to a class and each array element to a window in 
+    `uL_windows`. Deleterious rates are scaled by 1/`u0`, the deleterious 
+    mutation rate embodied in the precomputed lookup table. When we have an 
+    equilibrium demographic model, uL arrays may also be scaled by the ratio 
+    Ne/Ne0, where Ne is the effective size we wish to model and Ne0 is the 
+    effective size embodied in the lookup table. 
+
+    We collect constrained elements into shared windows in this manner to 
+    optimize predictions. The tradeoff, a loss of precision in the distances
+    between constrained and focal sites, is tolerable, especially when we wish
+    to consider landscapes at larger scales down the line.
 
     :param xs: Array holding the positions of focal neutral sites.
     :param s_vals: Array of selection coefficients. These should be a subset of
-        the s-values in `splines`.
+        the s-values in `splines`. The last element of `s_vals` must be 0.
     :param splines: A dictionary that maps (u, s) tuples to cubic splines which
         interpolate "unit" B values as a function of recombination distance. 
     :param dfes: A list of dictionaries defining parameters of gamma-distributed 
@@ -363,6 +407,7 @@ def parallel_Bvals(
         requirements scale as the square of this quantity at least.
     :param cores: Number of cores across which to parallelize predictions. If
         1 or None, simply loops over pairs of neutral/constrained blocks.
+    :param verbose: If True (default), print reports as block predictions run.
     
     :returns: An array of predicted B-values matching `xs` in shape.
     """
@@ -389,7 +434,7 @@ def parallel_Bvals(
         if df is None:
             raise ValueError(
                 "You must provide a lookup table to use `tolerance`")
-        thresholds = _get_r_thresholds(df, max_err=tolerance)
+        thresholds = _get_r_thresholds(df, tolerance=tolerance)
     else:
         thresholds = None
 
@@ -405,8 +450,8 @@ def parallel_Bvals(
     Bs = np.ones(len(xs), dtype=np.float64)
 
     if cores is None or cores == 1:
-        for xblock in xblocks:
-            for ublock in ublocks:
+        for ii, xblock in enumerate(xblocks):
+            for jj, ublock in enumerate(ublocks):
                 block_uL_arrs = [uLs[ublock] for uLs in uL_arrs]
                 if B_elem is not None:
                     block_B_elem = B_elem[ublock]
@@ -414,18 +459,23 @@ def parallel_Bvals(
                     block_B_elem = None
                 Bs[xblock] *= _predict_block_B(
                     xs[xblock],
-                    dfes,
+                    s_vals,
+                    splines,
                     uL_windows[ublock],
                     block_uL_arrs,
-                    splines,
                     rmap,
+                    dfes,
                     thresholds=thresholds,
                     B_elem=block_B_elem
                 )       
+                if verbose: 
+                    num_blocks = (len(xblocks), len(ublocks))
+                    print(Util._get_time(), 
+                        f"Predicted B in block {(ii+1, jj+1)} of {num_blocks}")
     else:
         pairings = [(xb, ub) for xb in xblocks for ub in ublocks]
         groups = [pairings[i:i + cores] for i in range(0, len(pairings), cores)]
-        for group in groups:
+        for ii, group in enumerate(groups):
             args = []
             for xblock, ublock in group:
                 block_uL_arrs = [uLs[ublock] for uLs in uL_arrs]
@@ -435,11 +485,12 @@ def parallel_Bvals(
                     block_B_elem = None
                 args.append((
                     xs[xblock],
-                    dfes,
+                    s_vals,
+                    splines,
                     uL_windows[ublock],
                     block_uL_arrs,
-                    splines,
                     rmap,
+                    dfes,
                     thresholds,
                     block_B_elem
                 ))
@@ -447,52 +498,96 @@ def parallel_Bvals(
                 group_Bs = p.starmap(_predict_block_B, args)
             for (xblock, _), window_B in zip(group, group_Bs):
                 Bs[xblock] *= window_B
+            if verbose: 
+                if ii == 0:
+                    num_pairs = len(pairings)
+                    progress = len(group)
+                else:
+                    progress += len(group)
+                print(Util._get_time(), 
+                    f"Predicted B in {progress} of {num_pairs} blocks")
     return Bs
 
 
 def _predict_block_B(    
     xs,
-    dfes,
     s_vals,
     splines,
-    uL_arrs,
     uL_windows,
+    uL_arrs,
     rmap,
+    dfes,
     thresholds=None,
     B_elem=None
 ):
     """
-    
+    Take the element class and s-value-specific B predictions made by 
+    `_predict_block_B_classwise` and aggregate them together into a vector of
+    site B predictions. Integrates each class B array with weights from the 
+    class DFE, then takes the element-wise product of these.
+
+    :param xs: Vector of focal neutral sites.
+    :param s_vals: Vector of selection coefficients. This should be a subset
+        of the selection coefficients in `splines`.
+    :param splines: Dictionary of cubic splines mapping recombination
+        distances to B values. Dictionary keys have the form (u0, s).
+    :param uL_windows: An array of windows that hold constrained sites in one 
+        or more element classes.
+    :param uL_arrs: List of vectors, each holding the intensity of deleterious
+        mutation across windows for a class. These factors are windowed sums of
+        deleterious mutation rates scaled by 1/u0.
+    :param rmap: Recombination map function, mapping physical coordinates to
+        map coordinates in M.
+    :param dfes: List of dictionaries, defining parameters of the gamma DFE for
+        each class.
+    :param thresholds: Array specifying recombination distance thresholds for
+        each element of `s_vals`. If *all* focal site-constrained window 
+        distances exceed the threshold for an s value, diversity reduction 
+        exerted by mutations at that s value is treated as negligible and
+        prediction is skipped.
+    :param B_elem: Array specifying diversity reductions on each window, for 
+        use in the interference correction.
+
+    :returns: A vector of sitewise predicted B values.
     """
-    pairwise_B = _predict_block_B_pairwise(
+    pairwise_B = _predict_block_B_classwise(
         xs,
         s_vals,
         splines,
-        uL_arrs,
         uL_windows,
+        uL_arrs,
         rmap,
         thresholds=thresholds,
         B_elem=B_elem
     )
     B_vec = np.ones(len(xs))
     for B_vals, dfe in zip(pairwise_B, dfes):
-        weights = Util._get_dfe_weights(dfe)
+        weights = Util._get_dfe_weights(dfe, s_vals)
         B_vec *= Util.integrate_with_weights(B_vals, weights[:-1])
     return B_vec
 
 
-def _predict_block_B_pairwise(
+def _predict_block_B_classwise(
     xs,
     s_vals,
     splines,
-    uL_arrs,
     uL_windows,
+    uL_arrs,
     rmap,
     thresholds=None,
     B_elem=None
 ):
     """
-    
+    Make B predictions for one or more classes of constrained elements using an 
+    efficient vectorized algorithm.
+
+    Returns a list of 2d B prediction arrays. Arrays correspond to constrained
+    element classes and resemble the output of `Bvals` in shape, e.g.
+    (number of s values, number of xs). 
+
+    See `_predict_block_B` for parameter definitions.
+    :returns: A list of arrays holding predicted B values for each site and
+        selection coefficient.
     """
     u0 = np.unique([k[0] for k in splines.keys()])[0]
     r_dists = _get_r_dists(xs, uL_windows, rmap)
@@ -514,7 +609,7 @@ def _predict_block_B_pairwise(
                     continue
             s_elems = s_val * B_elem
             unit_B = _get_interpolated_B_vals(
-                xs, s_elems, s_vals, r_dists, splines)
+                xs, s_elems, s_vals, r_dists, splines, u0=u0)
             for jj, uLs in enumerate(uL_arrs):
                 pairwise_B[jj][ii] = np.prod(unit_B ** uLs[:, None], axis=0)
     return pairwise_B
@@ -522,12 +617,13 @@ def _predict_block_B_pairwise(
 
 def _adjust_uL_arrays(B_map, uL_arrs, uL_windows):
     """
-    Scale the deleterious mutation rate factor uL by local B-value. Used in the
+    Scale deleterious mutation rate factors uL by local B-value. Used in the
     interference correction. 
 
-    :param B_map: 
-    :param uL_arrs:
-    :param uL_windows: 
+    :param B_map: A function mapping coordinates to diversity reductions.
+    :param uL_arrs: List of deleterious mutation intensity arrays for one or 
+        more classes of constrained sites.
+    :param uL_windows: Array of windows containing constrained sites.
     """
     window_B = _get_B_per_element(B_map, uL_windows)
     adjusted_uL_arrays = [uLs * window_B for uLs in uL_arrs]
@@ -536,7 +632,19 @@ def _adjust_uL_arrays(B_map, uL_arrs, uL_windows):
 
 def _get_interpolated_B_vals(xs, s_elems, s_vals, r_dists, splines, u0=1e-8):
     """
-    Interpolate B values 
+    For use in the interference correction. After scaling an s value by local
+    diversity reduction (`s_elems`), interpolate between splines to find the 
+    appropriate B value for each element of `s_elems`.
+
+    :param xs: Array of focal neutral sites.
+    :param s_elems: Array of local scalings of a selection coefficient.
+    :param s_vals: Array of selection coefficients in `splines`.
+    :param r_dists: Array of recombination distances between focal sites and
+        constrained elements.
+    :param splines: Dictionary of cubic splines.
+    :param u0: Mutation rate embodied in cubic splines.
+
+    :returns: Array of scaled unit B values.
     """
     unit_B = np.zeros((len(s_elems), len(xs)))
     for i, s_elem in enumerate(s_elems):
@@ -549,10 +657,17 @@ def _get_interpolated_B_vals(xs, s_elems, s_vals, r_dists, splines, u0=1e-8):
 
 def _get_r_thresholds(df, tolerance=1e-10):
     """
+    Compute distance thresholds in `r`, beyond which B values in the lookup
+    table `df` differ from 1 by less than `tolerance`. 
+
+    Used when predicting B in blocks. For a selection coefficient s, if all
+    focal neutral site/constrained site distances exceed the threshold assigned
+    to s, then s is skipped.
     
     :param df: Lookup table loaded as a pandas dataframe.
-    :param tolerance: Maximum allowable deviation in B-value from 1 
+    :param tolerance: Maximum allowable deviation of B value from 1 
         (default 1e-10).
+    :returns: Array of recombination distances satisfying `tolerance`.
     """
     s_vals = np.sort(np.unique(df["s"]))
     thresholds = np.zeros(len(s_vals), dtype=np.float64)

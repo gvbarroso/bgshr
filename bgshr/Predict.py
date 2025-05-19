@@ -224,31 +224,29 @@ def Bmap(
 #    return B
 
 
-def load_extended_lookup_table(file):
+def load_extended_lookup_table(file, num_s_vals=16):
     """
     Load a lookup table and extend it to include large selection coefficients
     using the ClassicBGS module. 
 
     :param file: Pathname of lookup table file (.csv). 
-    :returns: Extended lookup table, array of selection coefficients, dictionary
-        of cubic splines, and table Ne. When the table has several size epochs, 
-        table Ne is returne as None.
+    :param num_s_vals: Number of selection coefficients to add to the table 
+        using classic BGS theory. These are log-spaced between -1 and the
+        s-value with highest magnitude in the lookup table (default 16).
+    :returns: Extended lookup table and table Ne (`Ne0`). When the table has a 
+        history with several epochs, `Ne0` is None.
     """
     df = Util.load_lookup_table(file)
     df_sub = Util.subset_lookup_table(df)
     r_vals = np.unique(df_sub["r"])
     if np.max(r_vals) < 0.5:
-        raise ValueError("maximum r value in table must equal 0.5")
-    s_min = np.min(df_sub['s'])
-    s_extend = -np.concatenate(([0], np.logspace(-6, 0, 46)))
-    s_extend = s_extend[s_extend < s_min]
+        raise ValueError("Maximum r value in table must equal 0.5")
+    df_s_vals = np.sort(np.unique(df["s"]))
+    s_extend = -np.logspace(0, np.log10(-df_s_vals[0]), num_s_vals + 1)[:-1]
     Ts = next(iter(df_sub["Ts"]))
     Ns = next(iter(df_sub["Ns"]))
     # Equilibrium tables
     if len(str(Ts).split(";")) == 1:
-        s_min = np.min(df_sub['s'])
-        s_extend = -np.concatenate(([0], np.logspace(-6, 0, 46)))
-        s_extend = s_extend[s_extend < s_min]
         df_extended = ClassicBGS.extend_lookup_table(df_sub, s_extend)
         Ne0 = next(iter(df_extended['Ns']))
     # Non-equilibrium tables
@@ -259,11 +257,11 @@ def load_extended_lookup_table(file):
             s_extend, r_vals, Ns_split, Ts_split
         )
         df_extended = pandas.concat((df_sub, df_extend), ignore_index=True)
+        # Ensure that all table rows represent epochs with the same strings
         df_extended["Ts"] = Ts
         df_extended["Ns"] = Ns
         Ne0 = None
-    u_vals, s_vals, splines = Util.generate_cubic_splines(df_extended)
-    return df_extended, s_vals, splines, Ne0
+    return df_extended, Ne0
 
 
 def _table_expected_neu_pi0(df, neu_mut):
@@ -277,7 +275,7 @@ def _table_expected_neu_pi0(df, neu_mut):
     return neu_pi0
 
 
-def _expected_del_pi0(dfes, s_vals, del_sites_arrs, u_arrs, Ne=1e4, u0=1e-8):
+def _expected_del_pi0(dfes, s_vals, del_sites_arrs, uL_arrs, Ne=None, uL0=1e-8):
     """
     Compute pi0 for constrained sites, taking direct selection into account.
     For use with tables with equilibrium demographic histories. Works over
@@ -291,18 +289,18 @@ def _expected_del_pi0(dfes, s_vals, del_sites_arrs, u_arrs, Ne=1e4, u0=1e-8):
     :param del_sites_arrs: List of arrays. Each array corresponds to a class
         of elements, and each element in one array corresponds to a genomic
         window.
-    :param u_arrs: List of arrays recording average mutation rate for each 
+    :param uL_arrs: List of arrays recording average mutation rate for each 
         class in genomic windows.
-    :param Ne: Effective population size (default 1e4).
+    :param Ne: Effective population size (default None).
     """
     if Ne is None: 
         raise ValueError("You must provide Ne")
-    Hls = 2 * np.array([ClassicBGS._get_Hl(s, Ne, u0) for s in s_vals])
-    sum_del_pi0 = np.zeros(len(u_arrs[0]), dtype=np.float64)
-    for (dfe, u_arr, del_sites) in zip(dfes, u_arrs, del_sites_arrs):
+    Hls = 2 * np.array([ClassicBGS._get_Hl(s, Ne, uL0) for s in s_vals])
+    sum_del_pi0 = np.zeros(len(uL_arrs[0]), dtype=np.float64)
+    for (dfe, uL_arr, del_sites) in zip(dfes, uL_arrs, del_sites_arrs):
         weights = Util._get_dfe_weights(dfe, s_vals)
         unit_del_pi0 = np.sum(weights * Hls)
-        sum_del_pi0 += unit_del_pi0 * del_sites * (u_arr / u0)
+        sum_del_pi0 += unit_del_pi0 * del_sites * (uL_arr / uL0)
     del_pi0 = np.zeros(len(del_sites), dtype=np.float64)
     tot_del_sites = np.sum(del_sites_arrs, axis=0)
     del_pi0[tot_del_sites > 0] = (
@@ -310,7 +308,7 @@ def _expected_del_pi0(dfes, s_vals, del_sites_arrs, u_arrs, Ne=1e4, u0=1e-8):
     return del_pi0
 
 
-def _table_expected_del_pi0(df, dfes, del_sites_arrs, u_arrs):
+def _table_expected_del_pi0(df, dfes, del_sites_arrs, uL_arrs):
     """
     Compute window-average pi0 for constrained sites under direct selection from
     values stored in a lookup table. For use with tables with non-equilibrium
@@ -318,14 +316,15 @@ def _table_expected_del_pi0(df, dfes, del_sites_arrs, u_arrs):
     is erroneous.
     """
     df_sub = df[df["r"] == 0]
-    u0 = np.unique(df_sub["uL"])[0]
+    uL0 = np.unique(df_sub["uL"])[0]
     s_vals = np.sort(np.unique(df_sub["s"]))
-    Hls = 2 * np.array([df_sub[df_sub["s"] == s]["Hl"] for s in s_vals])
-    sum_del_pi0 = np.zeros(len(u_arrs[0]), dtype=np.float64)
-    for (dfe, u_arr, del_sites) in zip(dfes, u_arrs, del_sites_arrs):
-        weights = Util._get_dfe_weights(dfe)
+    Hls = 2 * np.array(
+        [df_sub[df_sub["s"] == s]["Hl"] for s in s_vals]).flatten()
+    sum_del_pi0 = np.zeros(len(uL_arrs[0]), dtype=np.float64)
+    for (dfe, uL_arr, del_sites) in zip(dfes, uL_arrs, del_sites_arrs):
+        weights = Util._get_dfe_weights(dfe, s_vals)
         unit_del_pi0 = np.sum(Hls * weights)
-        sum_del_pi0 += unit_del_pi0 * del_sites * (u_arr / u0)
+        sum_del_pi0 += unit_del_pi0 * del_sites * (uL_arr / uL0)
     del_pi0 = np.zeros(len(del_sites), dtype=np.float64)
     tot_del_sites = np.sum(del_sites_arrs, axis=0)
     del_pi0[tot_del_sites > 0] = (
@@ -550,7 +549,7 @@ def _predict_block_B(
 
     :returns: A vector of sitewise predicted B values.
     """
-    pairwise_B = _predict_block_B_classwise(
+    B_arrays = _predict_block_B_classwise(
         xs,
         s_vals,
         splines,
@@ -561,7 +560,7 @@ def _predict_block_B(
         B_elem=B_elem
     )
     B_vec = np.ones(len(xs))
-    for B_vals, dfe in zip(pairwise_B, dfes):
+    for B_vals, dfe in zip(B_arrays, dfes):
         weights = Util._get_dfe_weights(dfe, s_vals)
         B_vec *= Util.integrate_with_weights(B_vals, weights[:-1])
     return B_vec
@@ -589,7 +588,7 @@ def _predict_block_B_classwise(
     :returns: A list of arrays holding predicted B values for each site and
         selection coefficient.
     """
-    u0 = np.unique([k[0] for k in splines.keys()])[0]
+    uL0 = np.unique([k[0] for k in splines.keys()])[0]
     r_dists = _get_r_dists(xs, uL_windows, rmap)
     pairwise_B = [np.ones((len(s_vals[:-1]), len(xs))) for uLs in uL_arrs]
     # Initial predictions
@@ -598,7 +597,7 @@ def _predict_block_B_classwise(
             if thresholds is not None:
                 if np.all(r_dists > thresholds[ii]):
                     continue
-            unit_B = splines[(u0, s_val)](r_dists)
+            unit_B = splines[(uL0, s_val)](r_dists)
             for jj, uL_arr in enumerate(uL_arrs):
                 pairwise_B[jj][ii] = np.prod(unit_B ** uL_arr[:, None], axis=0)
     # Predictions under the interference correction
@@ -609,7 +608,7 @@ def _predict_block_B_classwise(
                     continue
             s_elems = s_val * B_elem
             unit_B = _get_interpolated_B_vals(
-                xs, s_elems, s_vals, r_dists, splines, u0=u0)
+                xs, s_elems, s_vals, r_dists, splines, uL0=uL0)
             for jj, uLs in enumerate(uL_arrs):
                 pairwise_B[jj][ii] = np.prod(unit_B ** uLs[:, None], axis=0)
     return pairwise_B
@@ -630,7 +629,7 @@ def _adjust_uL_arrays(B_map, uL_arrs, uL_windows):
     return adjusted_uL_arrays
 
 
-def _get_interpolated_B_vals(xs, s_elems, s_vals, r_dists, splines, u0=1e-8):
+def _get_interpolated_B_vals(xs, s_elems, s_vals, r_dists, splines, uL0=1e-8):
     """
     For use in the interference correction. After scaling an s value by local
     diversity reduction (`s_elems`), interpolate between splines to find the 
@@ -649,8 +648,8 @@ def _get_interpolated_B_vals(xs, s_elems, s_vals, r_dists, splines, u0=1e-8):
     unit_B = np.zeros((len(s_elems), len(xs)))
     for i, s_elem in enumerate(s_elems):
         s0, s1, p0, p1 = _get_interpolated_svals(s_elem, s_vals)
-        fac0 = p0 * splines[(u0, s0)](r_dists[i])
-        fac1 = p1 * splines[(u0, s1)](r_dists[i])
+        fac0 = p0 * splines[(uL0, s0)](r_dists[i])
+        fac1 = p1 * splines[(uL0, s1)](r_dists[i])
         unit_B[i] = fac0 + fac1
     return unit_B
 

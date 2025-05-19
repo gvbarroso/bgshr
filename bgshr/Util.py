@@ -374,23 +374,27 @@ def load_u_array(mut_tbl_file, masked=True):
     return windows, num_sites, u_arr
 
 
-def load_del_uL_arrays(
+def load_scaled_uL_arrays(
     mut_tbl_file, 
     annot_tbl_files, 
     Ne_scale=1, 
-    u0=1e-8,
-    shorten=True
+    uL0=1e-8,
+    filter_zeros=True
 ):
     """
-    Load arrays recording del_mut * del_sites for one or more classes of 
-    functionally constrained elements. For use in predicting B values- therefore
-    uses mutation rates tabulated *before* the application of a genetic mask.
+    Load arrays of deleterious mutation rate factors for one or more classes of
+    functionally constrained elements. These are windowed average rates weighted
+    by the number of constrained sites per window, and further scaled by a unit
+    mutation rate `uL0` and optionally an effective population size ratio. For 
+    use in predicting B values- therefore uses mutation rates tabulated *before* 
+    the application of a genetic mask.
 
-    Incorporates two forms of scaling on the mutation rate: (1) scaling to a
-    unit mutation rate (often 1e-8) obtained from the lookup table, and (2) 
-    scaling to some Ne (`Ne0`, often 1e4) corresponding to the Ne recorded in
-    the lookup table. The second scaling should only be imposed when the 
-    lookup table has been computed for an equilibrium population.
+    Optionally scales mutation rates. `Ne_scale` is for use with equilibrium
+    lookup tables. Call the effective size embodied in a lookup table computed
+    for an equilibrium population Ne0. We can predict B with a different Ne
+    parameter by scaling u, r and s by the ratio Ne/Ne0. The scaling on u is
+    implemented with `Ne_scale`. `uL0` is the deleterious mutation rate modeled
+    in the lookup table. 
 
     :param mut_tbl_file: Pathname of a .csv/.bedgraph file holding windowed
         mutation rate information.
@@ -404,7 +408,7 @@ def load_del_uL_arrays(
     :param u0: Optional mutation rate to scale by (default 1e-8). Should 
         correspond to the mutation rate in the lookup table being used.
         Could be set to 1 to load unscaled rates.
-    :param shorten: If True (default), remove all windows where uL is zero  
+    :param filter_zeros: If True (default), remove all windows where uL is zero  
         in every annotation class from output windows and uL arrays.
 
     :returns: Array of windows corresponding to uL values, list of uL arrays.
@@ -422,18 +426,18 @@ def load_del_uL_arrays(
         del_sites = np.array(annot_tbl["num_sites"])
         factors = np.array(annot_tbl["scale"])
         unscaled_uL_arr = del_sites * factors * tot_rates
-        uL_arr = unscaled_uL_arr * Ne_scale / u0
+        uL_arr = unscaled_uL_arr * Ne_scale / uL0
         uL_arrs.append(uL_arr)
-    if shorten:
+    if filter_zeros:
         nonzero = np.where(np.sum(uL_arrs, axis=0) > 0)[0]
         uL_windows = windows[nonzero]
         uL_arrs = [uL_arr[nonzero] for uL_arr in uL_arrs]
     return uL_windows, uL_arrs
 
 
-def load_del_u_arrays(mut_tbl_file, annot_tbl_files, masked=True):
+def load_uL_arrays(mut_tbl_file, annot_tbl_files, masked=True):
     """
-    Load arrays recording the deleterious mutation rate and number of 
+    Load arrays recording the average deleterious mutation rate and number of 
     constrained sites for one or more classes of constrained elements.
     
     :param mut_tbl_file: Pathname of a .csv/.bedgraph file holding windowed
@@ -452,7 +456,7 @@ def load_del_u_arrays(mut_tbl_file, annot_tbl_files, masked=True):
     mut_tbl = pandas.read_csv(mut_tbl_file)
     windows = np.array([mut_tbl["chromStart"], mut_tbl["chromEnd"]]).T
     tot_rates = np.array(mut_tbl["avg_mut"])
-    u_arrs = []
+    uL_arrs = []
     del_sites_arrs = []
     for file in annot_tbl_files:
         annot_tbl = pandas.read_csv(file)
@@ -466,10 +470,10 @@ def load_del_u_arrays(mut_tbl_file, annot_tbl_files, masked=True):
         else:
             del_sites = np.array(annot_tbl["num_sites"])
             factors = np.array(annot_tbl["scale"])
-        u_arr = factors * tot_rates
-        u_arrs.append(u_arr)
+        uL_arr = factors * tot_rates
+        uL_arrs.append(uL_arr)
         del_sites_arrs.append(del_sites)
-    return del_sites_arrs, u_arrs
+    return del_sites_arrs, uL_arrs
 
 
 def _get_time():

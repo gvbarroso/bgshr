@@ -172,6 +172,7 @@ def load_recombination_map(fname, L=None, scaling=1):
     rmap = build_recombination_map(pos, rates * scaling)
     return rmap
 
+
 def load_bedgraph(fname, sep=",", L=None, scaling=1):
     """
     Get positions and rates to build rate map.
@@ -199,6 +200,7 @@ def load_bedgraph(fname, sep=",", L=None, scaling=1):
     assert len(rates) == len(ends) - 1
     ratemap = build_recombination_map(ends, rates * scaling)
     return ratemap
+
 
 def haldane_map_function(rs):
     """
@@ -311,6 +313,34 @@ def weights_gamma_dfe(s_vals, shape, scale):
     return weights
 
 
+def _weights_gamma_dfe(s_vals, shape, scale):
+    assert np.all(s_vals <= 0)
+    s_vals_sorted = np.sort(s_vals)
+    if np.any(s_vals != s_vals_sorted):
+        raise ValueError("selection values are not sorted")
+    midpoints = (s_vals[1:] + s_vals[:-1]) / 2
+    grid = np.concatenate([[-np.inf], midpoints, [0]])
+    cdf_evals = stats.gamma.cdf(-grid, shape, scale=scale)
+    weights = -np.diff(cdf_evals)
+    return weights
+
+
+def _get_dfe_weights(dfe, s_vals):
+    """
+    Input DFEs should already be scaled as needed.
+    """
+    if dfe["type"] == "gamma":
+        weights = _weights_gamma_dfe(s_vals, dfe["shape"], dfe["scale"])
+    elif dfe["type"] == "gamma_neutral":
+        _weights = _weights_gamma_dfe(s_vals, dfe["shape"], dfe["scale"])
+        p_neu = dfe["p_neu"]
+        weights = np.append(
+            _weights[:-1] * (1 - p_neu), _weights[-1] * (1 - p_neu) + p_neu)
+    else:
+        raise ValueError(f"DFE type {dfe['type']} is unknown")
+    return weights
+
+
 def integrate_with_weights(vals, weights, u_fac=1):
     if len(vals) != len(weights):
         raise ValueError("values and weights are not same length")
@@ -318,11 +348,139 @@ def integrate_with_weights(vals, weights, u_fac=1):
     return out
 
 
+def load_u_array(mut_tbl_file, masked=True):
+    """
+    Load mutation rates from a windowed mutation rate table. The following
+    columns are expected: chrom, chromStart, chromEnd, num_sites, avg_mut,
+    num_sites_masked, avg_mut_masked
+
+    :param mut_tbl_file: Pathname of a .csv/.bedgraph file holding windowed
+        mutation rate information.
+    :param masked: If True (default), return quantities tabulated following
+        the application of a genetic mask. Reads from preexisiting columns
+        in the table "num_sites_masked" and "avg_mut_masked".
+
+    :returns: Array of windows, array of windowed site counts, array of 
+        windowed mutation rates.
+    """
+    mut_tbl = pandas.read_csv(mut_tbl_file)
+    windows = np.array([mut_tbl["chromStart"], mut_tbl["chromEnd"]]).T
+    if masked:
+        num_sites = np.array(mut_tbl["num_sites_masked"])
+        u_arr = np.array(mut_tbl["avg_mut_masked"])
+    else:
+        num_sites = np.array(mut_tbl["num_sites"])
+        u_arr = np.array(mut_tbl["avg_mut"])
+    return windows, num_sites, u_arr
+
+
+def load_scaled_uL_arrays(
+    mut_tbl_file, 
+    annot_tbl_files, 
+    Ne_scale=1, 
+    uL0=1e-8,
+    filter_zeros=True
+):
+    """
+    Load arrays of deleterious mutation rate factors for one or more classes of
+    functionally constrained elements. These are windowed average rates weighted
+    by the number of constrained sites per window, and further scaled by a unit
+    mutation rate `uL0` and optionally an effective population size ratio. For 
+    use in predicting B values- therefore uses mutation rates tabulated *before* 
+    the application of a genetic mask.
+
+    Optionally scales mutation rates. `Ne_scale` is for use with equilibrium
+    lookup tables. Call the effective size embodied in a lookup table computed
+    for an equilibrium population Ne0. We can predict B with a different Ne
+    parameter by scaling u, r and s by the ratio Ne/Ne0. The scaling on u is
+    implemented with `Ne_scale`. `uL0` is the deleterious mutation rate modeled
+    in the lookup table. 
+
+    :param mut_tbl_file: Pathname of a .csv/.bedgraph file holding windowed
+        mutation rate information.
+    :param annot_tbl_files: List of pathnames to .csv/.bedgraph files holding
+        windowed counts of constrained sites and ratios of deleterious 
+        mutation rates to the average rate. Each file corresponds to a class
+        of constrained genetic elements.
+    :param Ne_scale: Optional linear scale to mutation rates. Accounts for 
+        difference in the desired Ne and the Ne (`Ne0`) represented in an 
+        equilibrium lookup table (default 1).
+    :param u0: Optional mutation rate to scale by (default 1e-8). Should 
+        correspond to the mutation rate in the lookup table being used.
+        Could be set to 1 to load unscaled rates.
+    :param filter_zeros: If True (default), remove all windows where uL is zero  
+        in every annotation class from output windows and uL arrays.
+
+    :returns: Array of windows corresponding to uL values, list of uL arrays.
+    """
+    mut_tbl = pandas.read_csv(mut_tbl_file)
+    windows = np.array([mut_tbl["chromStart"], mut_tbl["chromEnd"]]).T
+    tot_rates = np.array(mut_tbl["avg_mut"])
+    uL_arrs = []
+    for file in annot_tbl_files:
+        annot_tbl = pandas.read_csv(file)
+        _windows = np.array([annot_tbl["chromStart"], annot_tbl["chromEnd"]]).T
+        if not np.all(_windows == windows):
+            raise ValueError(
+                "Annotation/mutation tables have mismatched windows")
+        del_sites = np.array(annot_tbl["num_sites"])
+        factors = np.array(annot_tbl["scale"])
+        unscaled_uL_arr = del_sites * factors * tot_rates
+        uL_arr = unscaled_uL_arr * Ne_scale / uL0
+        uL_arrs.append(uL_arr)
+    if filter_zeros:
+        nonzero = np.where(np.sum(uL_arrs, axis=0) > 0)[0]
+        uL_windows = windows[nonzero]
+        uL_arrs = [uL_arr[nonzero] for uL_arr in uL_arrs]
+    return uL_windows, uL_arrs
+
+
+def load_uL_arrays(mut_tbl_file, annot_tbl_files, masked=True):
+    """
+    Load arrays recording the average deleterious mutation rate and number of 
+    constrained sites for one or more classes of constrained elements.
+    
+    :param mut_tbl_file: Pathname of a .csv/.bedgraph file holding windowed
+        mutation rate information.
+    :param annot_tbl_files: List of pathnames to .csv/.bedgraph files holding
+        windowed counts of constrained sites and ratios of deleterious 
+        mutation rates to the average rate. Each file corresponds to a class
+        of constrained genetic elements.
+    :param masked: If True (default), return quantities tabulated following
+        the application of a genetic mask. Reads from preexisiting columns
+        in the table, "num_sites_masked" and "avg_mut_masked".
+
+    :returns: List of arrays of constrained site counts, list of arrays of 
+        window-average mutation rates for constrained sites.
+    """
+    mut_tbl = pandas.read_csv(mut_tbl_file)
+    windows = np.array([mut_tbl["chromStart"], mut_tbl["chromEnd"]]).T
+    tot_rates = np.array(mut_tbl["avg_mut"])
+    uL_arrs = []
+    del_sites_arrs = []
+    for file in annot_tbl_files:
+        annot_tbl = pandas.read_csv(file)
+        _windows = np.array([annot_tbl["chromStart"], annot_tbl["chromEnd"]]).T
+        if not np.all(_windows == windows):
+            raise ValueError(
+                "Annotation/mutation tables have mismatched windows")
+        if masked:
+            del_sites = np.array(annot_tbl["num_sites_masked"])
+            factors = np.array(annot_tbl["scale_masked"])
+        else:
+            del_sites = np.array(annot_tbl["num_sites"])
+            factors = np.array(annot_tbl["scale"])
+        uL_arr = factors * tot_rates
+        uL_arrs.append(uL_arr)
+        del_sites_arrs.append(del_sites)
+    return del_sites_arrs, uL_arrs
+
+
 def _get_time():
     """
-    Get a string representing the date and time in mm-dd-yy format.
+    Return a string representing the time and date with yy-mm-dd format.
     """
-    return '[' + datetime.strftime(datetime.now(), '%m-%d-%y %H:%M:%S') + ']'
+    return '[' + datetime.strftime(datetime.now(), '%y-%m-%d %H:%M:%S') + ']'
 
 
 def resolve_element_overlaps(element_arrs, L=None):

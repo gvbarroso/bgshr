@@ -590,16 +590,16 @@ def _predict_block_B_classwise(
     """
     uL0 = np.unique([k[0] for k in splines.keys()])[0]
     r_dists = _get_r_dists(xs, uL_windows, rmap)
-    pairwise_B = [np.ones((len(s_vals[:-1]), len(xs))) for uLs in uL_arrs]
+    B_arrays = [np.ones((len(s_vals[:-1]), len(xs))) for uLs in uL_arrs]
     # Initial predictions
     if B_elem is None:
         for ii, s_val in enumerate(s_vals[:-1]):
             if thresholds is not None:
                 if np.all(r_dists > thresholds[ii]):
                     continue
-            unit_B = splines[(uL0, s_val)](r_dists)
+            unit_Bs = splines[(uL0, s_val)](r_dists)
             for jj, uL_arr in enumerate(uL_arrs):
-                pairwise_B[jj][ii] = np.prod(unit_B ** uL_arr[:, None], axis=0)
+                B_arrays[jj][ii] = np.prod(unit_Bs ** uL_arr[:, None], axis=0)
     # Predictions under the interference correction
     else:
         for ii, s_val in enumerate(s_vals[:-1]):
@@ -607,11 +607,11 @@ def _predict_block_B_classwise(
                 if np.all(r_dists > thresholds[ii]):
                     continue
             s_elems = s_val * B_elem
-            unit_B = _get_interpolated_B_vals(
+            unit_Bs = _get_interpolated_B_vals(
                 xs, s_elems, s_vals, r_dists, splines, uL0=uL0)
             for jj, uLs in enumerate(uL_arrs):
-                pairwise_B[jj][ii] = np.prod(unit_B ** uLs[:, None], axis=0)
-    return pairwise_B
+                B_arrays[jj][ii] = np.prod(unit_Bs ** uLs[:, None], axis=0)
+    return B_arrays
 
 
 def _adjust_uL_arrays(B_map, uL_arrs, uL_windows):
@@ -624,8 +624,8 @@ def _adjust_uL_arrays(B_map, uL_arrs, uL_windows):
         more classes of constrained sites.
     :param uL_windows: Array of windows containing constrained sites.
     """
-    window_B = _get_B_per_element(B_map, uL_windows)
-    adjusted_uL_arrays = [uLs * window_B for uLs in uL_arrs]
+    window_Bs = _get_B_per_element(B_map, uL_windows)
+    adjusted_uL_arrays = [uLs * window_Bs for uLs in uL_arrs]
     return adjusted_uL_arrays
 
 
@@ -645,13 +645,13 @@ def _get_interpolated_B_vals(xs, s_elems, s_vals, r_dists, splines, uL0=1e-8):
 
     :returns: Array of scaled unit B values.
     """
-    unit_B = np.zeros((len(s_elems), len(xs)))
+    unit_Bs = np.zeros((len(s_elems), len(xs)))
     for i, s_elem in enumerate(s_elems):
         s0, s1, p0, p1 = _get_interpolated_svals(s_elem, s_vals)
         fac0 = p0 * splines[(uL0, s0)](r_dists[i])
         fac1 = p1 * splines[(uL0, s1)](r_dists[i])
-        unit_B[i] = fac0 + fac1
-    return unit_B
+        unit_Bs[i] = fac0 + fac1
+    return unit_Bs
 
 
 def _get_r_thresholds(df, tolerance=1e-10):
@@ -683,3 +683,19 @@ def _get_r_thresholds(df, tolerance=1e-10):
             threshold_idx = beyond_tolerance[0]
             thresholds[i] = r_vals[threshold_idx]
     return thresholds
+
+
+def unlinked_Bval(df, s_vals, dfe, uL_arr):
+    """
+    Compute the unlinked diversity reduction exerted by some class of contrained
+    sites, described by a DFE and an array of deleterious mutation weights.
+    """
+    weights = Util._get_dfe_weights(dfe, s_vals)
+    sub_df = df[df["r"] == 0.5]
+    unit_Bs = [np.unique(sub_df[sub_df["s"] == s]["B"])[0] for s in s_vals]
+    sum_uL = np.sum(uL_arr)
+    Bs = np.ones(len(s_vals), dtype=np.float64)
+    for ii, bb in enumerate(unit_Bs[:-1]):
+        Bs[ii] = bb ** sum_uL
+    unlinked_B = Util.integrate_with_weights(Bs, weights)
+    return unlinked_B

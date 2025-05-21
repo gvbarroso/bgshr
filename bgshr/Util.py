@@ -183,12 +183,9 @@ def load_bedgraph_recombination_map(
     rate_col="rate"
 ):
     """
-    Get positions and rates to build rate map.
-    If L is not None, we extend the map to L if it is greater than the
-    last point in the input file, or we truncate the map at L if it is
-    less than the last point in the input file.
-    If L is not given, the interpolated map does not extend beyond
-    the final data point.
+    Load a recombination map stored in bedgraph format. If L is given, the map
+    is truncated to end at position L- if L exceeds the length of the map, an 
+    error is raised.
     """
     map_df = pandas.read_csv(fname, sep=sep)
     starts = np.array(map_df[start_col])

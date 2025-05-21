@@ -256,29 +256,6 @@ def get_elements(df, L=None):
     return elements
 
 
-def get_elements(df, L=None):
-    """
-    From a bed file, load elements. If L is not None, we exlude regions
-    greater than L, and any region that overlaps with L is truncated at L.
-    """
-    elem_left = []
-    elem_right = []
-    df_sub = df[df["selected"] == 1] # select only exons
-
-    elem_left = np.array(df_sub["start"])
-    elem_right = np.array(df_sub["end"])
-    if L is not None:
-        to_del = np.where(elem_left >= L)[0]
-        elem_left = np.delete(elem_left, to_del)
-        elem_right = np.delete(elem_right, to_del)
-        to_trunc = np.where(elem_right > L)[0]
-        elem_right[to_trunc] = L
-    elements = np.zeros((len(elem_left), 2), dtype=int)
-    elements[:, 0] = elem_left
-    elements[:, 1] = elem_right
-    return elements
-
-
 def collapse_elements(elements):
     elements_comb = []
     for e in elements:
@@ -607,6 +584,45 @@ def subtract_regions(elements0, elements1, L=None):
     return ret
 
 
+def compute_average_rate(intervals, rates):
+    """
+    Compute the average (typically mutation) rate in each interval of 
+    `intervals` from a site-resolution map `rates`. Leaves nan rates out of the 
+    calculation, and where all rates in an interval are nan, returns a nan 
+    average. Output data don't contain nan; averages in intervals where all data
+    is missing equal 0. Also compute the number of sites with non-missing 
+    values.
+
+    :param intervals: Array of interval starts/ends.
+    :param rates: Site-resolution ratemap.
+
+    :returns: Windowed numbers of sites with non-missing data and window means.
+    """
+    num_sites = np.zeros(len(intervals), dtype=np.int64)
+    avg_rate = np.zeros(len(intervals), dtype=np.float64)
+    for ii, (start, end) in enumerate(intervals):
+        if np.all(np.isnan(rates[start:end])):
+            continue
+        else:
+            num_sites[ii] = np.count_nonzero(np.isfinite(rates[start:end]))
+            avg_rate[ii] = np.nanmean(rates[start:end])
+    return num_sites, avg_rate
+
+
+def read_bedfile(bed_file):
+    """
+    This is redundant with functions above, but it also returns the
+    chromosome number which is sometimes useful. 
+    """
+    data = pandas.read_csv(bed_file, sep="\t", header=None)
+    intervals = np.stack((data[1], data[2]), axis=1, dtype=np.int64)
+    chrom = list(set(data[0]))[0]
+    return intervals, chrom
+
+
+####
+
+
 def resolve_element_overlaps(element_arrs, L=None):
     """
     Resolve overlaps between classes of elements in a brute-force manner, 
@@ -709,30 +725,3 @@ def write_bedfile(fname, chrom_num, regions, sep='\t', write_header=False):
             line = sep.join([chrom_num, str(start), str(end)]) + '\n'
             file.write(line.encode())
     return
-
-
-def read_bedfile(fname):
-    """
-    This is redundant with functions above, but it also returns the
-    chromosome number which is sometimes useful. 
-    """
-    open_func = gzip.open if fname.endswith('.gz') else open
-    with open_func(fname, 'rb') as file:
-        line0 = file.readline().decode().split()
-    if line0[1].isnumeric() and line0[2].isnumeric():
-        skiprows = 0
-    else:
-        skiprows = 1
-    regions = np.loadtxt(
-        fname, dtype=np.int64, skiprows=skiprows, usecols=(1, 2)
-    )
-    if regions.ndim == 1:
-        regions = regions[np.newaxis]
-    chrom_nums = np.loadtxt(
-        fname, dtype=str, skiprows=skiprows, usecols=0
-    )
-    if len(set(chrom_nums)) == 1:
-        ret_chrom = chrom_nums[-1]
-    else:
-        ret_chrom = chrom_nums
-    return ret_chrom, regions

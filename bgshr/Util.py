@@ -173,7 +173,15 @@ def load_recombination_map(fname, L=None, scaling=1):
     return rmap
 
 
-def load_bedgraph(fname, sep=",", L=None, scaling=1):
+def load_bedgraph_recombination_map(
+    fname, 
+    sep=",", 
+    L=None, 
+    scaling=1,
+    start_col="start",
+    end_col="end",
+    rate_col="rate"
+):
     """
     Get positions and rates to build rate map.
     If L is not None, we extend the map to L if it is greater than the
@@ -183,22 +191,19 @@ def load_bedgraph(fname, sep=",", L=None, scaling=1):
     the final data point.
     """
     map_df = pandas.read_csv(fname, sep=sep)
-    ends = np.concatenate(([0], map_df["end"]))
-    rates = np.concatenate(([0], map_df[map_df.columns[3]]))
+    starts = np.array(map_df[start_col])
+    ends = np.array(map_df[end_col])
+    rates = np.array(map_df[rate_col])
+    edges = np.concatenate(([starts[0]], ends))
     if L is not None:
         if L > ends[-1]:
-            ends = np.insert(ends, len(ends), L)
-        elif L < ends[-1]:
-            cutoff = np.where(L <= ends)[0][0]
-            ends = ends[:cutoff]
-            ends = np.append(ends, L)
-            rates = rates[:cutoff]
+            raise ValueError("`L` cannot exceed the highest physical position")
         else:
-            rates = rates[:-1]
-    else:
-        rates = rates[:-1]
-    assert len(rates) == len(ends) - 1
-    ratemap = build_recombination_map(ends, rates * scaling)
+            cutoff = np.where(L <= edges)[0][0]
+            edges = np.append(edges[:cutoff], L) 
+            rates = rates[:cutoff]
+    assert len(rates) == len(edges) - 1
+    ratemap = build_recombination_map(edges, rates * scaling)
     return ratemap
 
 
@@ -230,27 +235,6 @@ def load_elements(bed_file, L=None):
     elements[:, 1] = elem_right
     return elements
 
-def get_elements(df, L=None):
-    """
-    From a bed file, load elements. If L is not None, we exlude regions
-    greater than L, and any region that overlaps with L is truncated at L.
-    """
-    elem_left = []
-    elem_right = []
-    df_sub = df[df["selected"] == 1] # select only exons
-
-    elem_left = np.array(df_sub["start"])
-    elem_right = np.array(df_sub["end"])
-    if L is not None:
-        to_del = np.where(elem_left >= L)[0]
-        elem_left = np.delete(elem_left, to_del)
-        elem_right = np.delete(elem_right, to_del)
-        to_trunc = np.where(elem_right > L)[0]
-        elem_right[to_trunc] = L
-    elements = np.zeros((len(elem_left), 2), dtype=int)
-    elements[:, 0] = elem_left
-    elements[:, 1] = elem_right
-    return elements
 
 def get_elements(df, L=None):
     """
@@ -273,6 +257,30 @@ def get_elements(df, L=None):
     elements[:, 0] = elem_left
     elements[:, 1] = elem_right
     return elements
+
+
+def get_elements(df, L=None):
+    """
+    From a bed file, load elements. If L is not None, we exlude regions
+    greater than L, and any region that overlaps with L is truncated at L.
+    """
+    elem_left = []
+    elem_right = []
+    df_sub = df[df["selected"] == 1] # select only exons
+
+    elem_left = np.array(df_sub["start"])
+    elem_right = np.array(df_sub["end"])
+    if L is not None:
+        to_del = np.where(elem_left >= L)[0]
+        elem_left = np.delete(elem_left, to_del)
+        elem_right = np.delete(elem_right, to_del)
+        to_trunc = np.where(elem_right > L)[0]
+        elem_right[to_trunc] = L
+    elements = np.zeros((len(elem_left), 2), dtype=int)
+    elements[:, 0] = elem_left
+    elements[:, 1] = elem_right
+    return elements
+
 
 def collapse_elements(elements):
     elements_comb = []
@@ -348,6 +356,36 @@ def integrate_with_weights(vals, weights, u_fac=1):
     return out
 
 
+def convert_bedgraph_mutation_map(
+    fname,
+    out_fname,
+    chrom_col="chr",
+    start_col="start", 
+    end_col="end", 
+    rate_col="u"
+):
+    """
+    Construct a bedgraph file formatted for use in the B prediction pipeline
+    from a bedgraph file with only a `rate_col`.
+    """
+    df = pandas.read_csv(fname)
+    starts = np.array(df[start_col])
+    ends = np.array(df[end_col])
+    avg_mut = np.array(df[rate_col])
+    num_sites = ends - starts
+    data = {
+        "chrom": df[chrom_col],
+        "chromStart": starts,
+        "chromEnd": ends,
+        "num_sites": num_sites, 
+        "avg_mut": avg_mut,
+        "num_sites_masked": num_sites, 
+        "avg_mut_masked": avg_mut
+    }
+    pandas.DataFrame(data).to_csv(out_fname, index=False)
+    return
+
+
 def load_u_array(mut_tbl_file, masked=True):
     """
     Load mutation rates from a windowed mutation rate table. The following
@@ -367,11 +405,11 @@ def load_u_array(mut_tbl_file, masked=True):
     windows = np.array([mut_tbl["chromStart"], mut_tbl["chromEnd"]]).T
     if masked:
         num_sites = np.array(mut_tbl["num_sites_masked"])
-        u_arr = np.array(mut_tbl["avg_mut_masked"])
+        avg_mut = np.array(mut_tbl["avg_mut_masked"])
     else:
         num_sites = np.array(mut_tbl["num_sites"])
-        u_arr = np.array(mut_tbl["avg_mut"])
-    return windows, num_sites, u_arr
+        avg_mut = np.array(mut_tbl["avg_mut"])
+    return windows, num_sites, avg_mut
 
 
 def load_scaled_uL_arrays(
@@ -483,6 +521,95 @@ def _get_time():
     return '[' + datetime.strftime(datetime.now(), '%y-%m-%d %H:%M:%S') + ']'
 
 
+def regions_to_mask(regions, L=None):
+    """
+    Return a boolean mask array that equals 0 within `regions` and 1 
+    elsewhere.
+    """
+    if L is None:
+        L = regions[-1, 1]
+    mask = np.ones(L, dtype=bool)
+    for (start, end) in regions:
+        if start > L:
+            break
+        if end > L:
+            end = L
+        mask[start:end] = 0
+    return mask
+
+
+def mask_to_regions(mask):
+    """
+    Return an array representing the regions that are not masked in a boolean
+    array (0s).
+    """
+    jumps = np.diff(np.concatenate(([1], mask, [1])))
+    starts = np.where(jumps == -1)[0]
+    ends = np.where(jumps == 1)[0]
+    regions = np.stack([starts, ends], axis=1)
+    return regions
+
+
+def collapse_regions(regions):
+    """
+    Collapse any overlapping elements in an array together.
+    """
+    return mask_to_regions(regions_to_mask(regions))
+
+
+def intersect_regions(regions_arrs, L=None):
+    """
+    Form an array of regions from the intersection of sites in input regions
+    arrays. These may be mask regions, elements, or whatever.
+
+    :param regions_arrs: List of regions arrays.
+    :param L: Maximum position to include (default None).
+
+    :returns: Array of regions composed of shared sites.
+    """
+    if L is None:
+        L = max([regions[-1, 1] for regions in regions_arrs])
+    coverage = np.zeros(L, dtype=np.uint8) 
+    for elements in regions_arrs:
+        for (start, end) in elements:
+            coverage[start:end] += 1
+    boolmask = coverage < len(regions_arrs)
+    isec = mask_to_regions(boolmask)
+    return isec
+
+
+def add_regions(regions_arrs, L=None):
+    """
+    Form an array of regions from the union of covered sites in several input
+    regions arrays.
+    """
+    if L is None:
+        L = max([regions[-1, 1] for regions in regions_arrs])
+    coverage = np.zeros(L, dtype=np.uint8) 
+    for elements in regions_arrs:
+        for (start, end) in elements:
+            coverage[start:end] += 1
+    boolmask = coverage < 1
+    union = mask_to_regions(boolmask)
+    return union
+
+
+def subtract_regions(elements0, elements1, L=None):
+    """
+    Get an array of regions representing sites that belong to regions in 
+    `elements0` and not `elements1`
+    """
+    if L is None:
+        L = max((elements0[-1, 1], elements1[-1, 1]))
+    boolmask = np.ones(L, dtype=bool) 
+    for (start, end) in elements0:
+        boolmask[start:end] = False
+    for (start, end) in elements1:
+        boolmask[start:end] = True
+    ret = mask_to_regions(boolmask)
+    return ret
+
+
 def resolve_element_overlaps(element_arrs, L=None):
     """
     Resolve overlaps between classes of elements in a brute-force manner, 
@@ -504,14 +631,6 @@ def resolve_element_overlaps(element_arrs, L=None):
         covered[~mask] += 1
     assert not np.any(covered > 1)
     return resolved_arrs
-
-
-def filter_elements_by_length(elements, min_length):
-    """
-    Remove any intervals with length < min_len from an array of elements.
-    """
-    above_thresh = np.where(np.diff(elements, axis=1) >= min_length)[0]
-    return elements[above_thresh]
 
 
 def read_bedgraph(fname, sep=','):
@@ -579,42 +698,6 @@ def write_bedgraph(fname, chrom_num, regions, data, sep=','):
     return
 
 
-def regions_to_mask(regions, L=None):
-    """
-    Return a boolean mask array that equals 0 within `regions` and 1 
-    elsewhere.
-    """
-    if L is None:
-        L = regions[-1, 1]
-    mask = np.ones(L, dtype=bool)
-    for (start, end) in regions:
-        if start > L:
-            break
-        if end > L:
-            end = L
-        mask[start:end] = 0
-    return mask
-
-
-def mask_to_regions(mask):
-    """
-    Return an array representing the regions that are not masked in a boolean
-    array (0s).
-    """
-    jumps = np.diff(np.concatenate(([1], mask, [1])))
-    starts = np.where(jumps == -1)[0]
-    ends = np.where(jumps == 1)[0]
-    regions = np.stack([starts, ends], axis=1)
-    return regions
-
-
-def _collapse_elements(elements):
-    """
-    Collapse any overlapping elements in an array together.
-    """
-    return mask_to_regions(regions_to_mask(elements))
-
-
 def write_bedfile(fname, chrom_num, regions, sep='\t', write_header=False):
     """
     Write an array of elements/regions to file in .bed format.
@@ -629,15 +712,6 @@ def write_bedfile(fname, chrom_num, regions, sep='\t', write_header=False):
             line = sep.join([chrom_num, str(start), str(end)]) + '\n'
             file.write(line.encode())
     return
-
-
-def setup_windows(size, L, start=0):
-    """
-    Get an array of contiguous windows of uniform size `size`.
-    """
-    edges = np.arange(start + size, L + size, size)
-    _edges = np.concatenate(([start], edges[:-1].repeat(2), [edges[-1]]))
-    return _edges.reshape(-1, 2)
 
 
 def read_bedfile(fname):

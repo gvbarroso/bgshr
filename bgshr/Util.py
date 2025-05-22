@@ -10,6 +10,7 @@ import pandas
 from scipy import interpolate
 from scipy import integrate
 from scipy import stats
+import warnings
 
 
 def load_lookup_table(df_name, sep=","):
@@ -584,40 +585,106 @@ def subtract_regions(elements0, elements1, L=None):
     return ret
 
 
-def compute_average_rate(intervals, rates):
+def construct_site_map(intervals, values, L=None):
     """
-    Compute the average (typically mutation) rate in each interval of 
-    `intervals` from a site-resolution map `rates`. Leaves nan rates out of the 
-    calculation, and where all rates in an interval are nan, returns a nan 
-    average. Output data don't contain nan; averages in intervals where all data
-    is missing equal 0. Also compute the number of sites with non-missing 
-    values.
+    Construct a site-resolution map from a set of window starts/ends `intervals`
+    and an array of window `values`.
+    """
+    assert len(intervals) == len(values)
+    if L is None:
+        L = int(intervals[-1, 1])
+    site_map = np.zeros(L, dtype=np.float64)
+    for ii, (start, end) in enumerate(intervals):
+        if start >= L:
+            break
+        if end > L:
+            end = L
+        site_map[start:end] = values[ii]
+    return site_map
+
+
+def compute_windowed_average(intervals, site_map):
+    """
+    Compute windowed averages of some site-resolution quantity `vec`. Non-
+    numeric (nan) values are ignored- windows where all values are nan are
+    left with averages of zero. Also returns an array holding the count of
+    non-missing site data in each window.
+
+    If intervals exceed the length of site map, no error is raised.
 
     :param intervals: Array of interval starts/ends.
-    :param rates: Site-resolution ratemap.
+    :param site_map: Site-resolution ratemap.
 
-    :returns: Windowed numbers of sites with non-missing data and window means.
+    :returns: Arrays of windowed site counts and window averages.
     """
     num_sites = np.zeros(len(intervals), dtype=np.int64)
     avg_rate = np.zeros(len(intervals), dtype=np.float64)
     for ii, (start, end) in enumerate(intervals):
-        if np.all(np.isnan(rates[start:end])):
+        if np.all(np.isnan(site_map[start:end])):
             continue
         else:
-            num_sites[ii] = np.count_nonzero(np.isfinite(rates[start:end]))
-            avg_rate[ii] = np.nanmean(rates[start:end])
+            num_sites[ii] = np.count_nonzero(np.isfinite(site_map[start:end]))
+            avg_rate[ii] = np.nanmean(site_map[start:end])
     return num_sites, avg_rate
 
 
-def read_bedfile(bed_file):
+def read_bedfile(fname, filter_col=None, sep=None):
     """
-    This is redundant with functions above, but it also returns the
-    chromosome number which is sometimes useful. 
+    Load a bed file, returning an array of intervals and the chromosome number.
+
+    :param dict filter_col: Optional 1-dictionary for filtering intervals. If
+        given, return only intervals where the column named by the key of
+        `filter_col` has an entry matching `filter_col[key]`.
+    :param str sep: Optional separator string, defaults to "\t" if None.
     """
-    data = pandas.read_csv(bed_file, sep="\t", header=None)
-    intervals = np.stack((data[1], data[2]), axis=1, dtype=np.int64)
-    chrom = list(set(data[0]))[0]
+    # Check whether there is a header
+    if fname.endswith(".gz"):
+        with gzip.open(fname, "rb") as fin:
+            first_line = fin.readline().decode()
+    else:
+        with open(fname, "r") as fin:
+            first_line = fin.readline()
+    if "," in first_line:
+        split_line = first_line.split(",")
+        if sep is None:
+            sep = ","
+    else:
+        split_line = first_line.split()
+        if sep is None:
+            sep = "\s+"
+    if split_line[1].isnumeric():
+        data = pandas.read_csv(fname, sep=sep, header=None)
+    else:
+        data = pandas.read_csv(fname, sep=sep)
+    if filter_col is not None:
+        assert len(filter_col) == 1
+        col_name = next(iter(filter_col))
+        data = data[data[col_name] == filter_col[col_name]]
+    columns = data.columns
+    intervals = np.stack(
+        (data[columns[1]], data[columns[2]]), axis=1).astype(np.int64)
+    uniq_chroms = list(set(data[columns[0]]))
+    if len(uniq_chroms) > 1:
+        warnings.warn(f"Loaded bed file has more than one unique chrom")
+    chrom = str(uniq_chroms[0])
     return intervals, chrom
+
+
+def write_bedfile(fname, intervals, chrom):
+    """
+    Write an array of elements/regions to file in .bed format.
+
+    :param str chrom: String representing the chromosome number.
+    """
+    if not isinstance(chrom, str): 
+        chrom = str(chrom)
+    data = {
+        "chrom": [chrom] * len(intervals), 
+        "chromStart": intervals[:, 0],
+        "chromEnd": intervals[:, 1]
+    }
+    pandas.DataFrame(data).to_csv(fname, index=False)
+    return
 
 
 ####
@@ -707,21 +774,5 @@ def write_bedgraph(fname, chrom_num, regions, data, sep=','):
         for i, (start, end) in enumerate(regions):
             ldata = [str(data[field][i]) for field in fields]
             line = sep.join([chrom_num, str(start), str(end)] + ldata) + '\n'
-            file.write(line.encode())
-    return
-
-
-def write_bedfile(fname, chrom_num, regions, sep='\t', write_header=False):
-    """
-    Write an array of elements/regions to file in .bed format.
-    """
-    if not isinstance(chrom_num, str): chrom_num = str(chrom_num)
-    open_func = gzip.open if fname.endswith('.gz') else open
-    with open_func(fname, 'wb') as file:
-        if write_header:
-            line = sep.join(['#chrom', 'chromStart', 'chromEnd']) + '\n'
-            file.write(line.encode())
-        for (start, end) in regions:
-            line = sep.join([chrom_num, str(start), str(end)]) + '\n'
             file.write(line.encode())
     return

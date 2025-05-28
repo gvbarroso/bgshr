@@ -683,7 +683,7 @@ def write_bedfile(fname, intervals, chrom):
         "chromStart": intervals[:, 0],
         "chromEnd": intervals[:, 1]
     }
-    pandas.DataFrame(data).to_csv(fname, index=False)
+    pandas.DataFrame(data).to_csv(fname, index=False, sep="\t")
     return
 
 

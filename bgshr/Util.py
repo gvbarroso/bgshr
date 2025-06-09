@@ -607,8 +607,8 @@ def compute_windowed_average(intervals, site_map):
     """
     Compute windowed averages of some site-resolution quantity `vec`. Non-
     numeric (nan) values are ignored- windows where all values are nan are
-    left with averages of zero. Also returns an array holding the count of
-    non-missing site data in each window.
+    left with averages of zero. Also returns an array holding the count of sites
+    with non-missing in each window.
 
     If intervals exceed the length of site map, no error is raised.
 
@@ -682,6 +682,20 @@ def write_bedfile(fname, intervals, chrom):
         "chrom": [chrom] * len(intervals), 
         "chromStart": intervals[:, 0],
         "chromEnd": intervals[:, 1]
+    }
+    pandas.DataFrame(data).to_csv(fname, index=False, sep="\t")
+    return
+
+
+def write_uniform_mutation_interval(fname, L, u, chrom):
+    """
+    Write a one-line .csv file specifying an interval and uniform mutation rate. 
+    """
+    data = {
+        "chrom": [chrom],
+        "chromStart": [0],
+        "chromEnd": [L],
+        "rate": [u]
     }
     pandas.DataFrame(data).to_csv(fname, index=False)
     return

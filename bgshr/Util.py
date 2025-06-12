@@ -381,6 +381,7 @@ def load_u_array(mut_tbl_file, masked=True):
     if masked:
         num_sites = np.array(mut_tbl["num_sites_masked"])
         avg_mut = np.array(mut_tbl["avg_mut_masked"])
+        avg_mut[np.isnan(avg_mut)] = 0
     else:
         num_sites = np.array(mut_tbl["num_sites"])
         avg_mut = np.array(mut_tbl["avg_mut"])
@@ -436,8 +437,9 @@ def load_scaled_uL_arrays(
         if not np.all(_windows == windows):
             raise ValueError(
                 "Annotation/mutation tables have mismatched windows")
-        del_sites = np.array(annot_tbl["num_sites"])
+        del_sites = np.array(annot_tbl["del_sites"])
         factors = np.array(annot_tbl["scale"])
+        factors[np.isnan(factors)] = 0
         unscaled_uL_arr = del_sites * factors * tot_rates
         uL_arr = unscaled_uL_arr * Ne_scale / uL0
         uL_arrs.append(uL_arr)
@@ -468,7 +470,11 @@ def load_uL_arrays(mut_tbl_file, annot_tbl_files, masked=True):
     """
     mut_tbl = pandas.read_csv(mut_tbl_file)
     windows = np.array([mut_tbl["chromStart"], mut_tbl["chromEnd"]]).T
-    tot_rates = np.array(mut_tbl["avg_mut"])
+    if masked:
+        tot_rates = np.array(mut_tbl["avg_mut_masked"])
+        tot_rates[np.isnan(tot_rates)] = 0
+    else:
+        tot_rates = np.array(mut_tbl["avg_mut"])
     uL_arrs = []
     del_sites_arrs = []
     for file in annot_tbl_files:
@@ -478,11 +484,12 @@ def load_uL_arrays(mut_tbl_file, annot_tbl_files, masked=True):
             raise ValueError(
                 "Annotation/mutation tables have mismatched windows")
         if masked:
-            del_sites = np.array(annot_tbl["num_sites_masked"])
+            del_sites = np.array(annot_tbl["del_sites_masked"])
             factors = np.array(annot_tbl["scale_masked"])
         else:
-            del_sites = np.array(annot_tbl["num_sites"])
+            del_sites = np.array(annot_tbl["del_sites"])
             factors = np.array(annot_tbl["scale"])
+        factors[np.isnan(factors)] = 0
         uL_arr = factors * tot_rates
         uL_arrs.append(uL_arr)
         del_sites_arrs.append(del_sites)
@@ -603,7 +610,7 @@ def construct_site_map(intervals, values, L=None):
     return site_map
 
 
-def compute_windowed_average(intervals, site_map):
+def compute_windowed_average(intervals, site_map, fill_val=0):
     """
     Compute windowed averages of some site-resolution quantity `vec`. Non-
     numeric (nan) values are ignored- windows where all values are nan are
@@ -614,11 +621,13 @@ def compute_windowed_average(intervals, site_map):
 
     :param intervals: Array of interval starts/ends.
     :param site_map: Site-resolution ratemap.
+    :param float fill_val: Default value for windows where all data in 
+        `site_map` are missing (default 0). 
 
     :returns: Arrays of windowed site counts and window averages.
     """
     num_sites = np.zeros(len(intervals), dtype=np.int64)
-    avg_rate = np.zeros(len(intervals), dtype=np.float64)
+    avg_rate = np.full(len(intervals), fill_val, dtype=np.float64)
     for ii, (start, end) in enumerate(intervals):
         if np.all(np.isnan(site_map[start:end])):
             continue

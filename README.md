@@ -47,10 +47,10 @@ predictions for relative reduction in diversity, and combines the effects
 across many loci multiplicatively. A first-order correction for interference
 can be applied by adjusting parameters based on the local rescaling of
 effective population sizes. We generate lookup tables using the `moments++`
-model available here https://github.com/gvbarroso/momentspp/tree/main.
+mode,l available here: https://github.com/gvbarroso/momentspp/tree/main.
 
 In addition to the lookup table, we need one or more arrays of constrained
-genomic elements that allow for selected mutations, an array indicating 
+genomic elements that experience selected mutations, an array indicating 
 estimates of the per-base deleterious mutation rate, and a recombination map or 
 per-base recombination rate. Along with these data we require parameters for
 the relevant gamma-distributed DFEs, which may include a point mass of neutral

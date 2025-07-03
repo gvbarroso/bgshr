@@ -361,6 +361,68 @@ def convert_bedgraph_mutation_map(
     return
 
 
+def compute_scale(site_map, elements, intervals):
+    """
+    Compute deleterious mutation rate scales (ratios of the deleterious rate to 
+    the total average rate) in windows defined by `intervals`.
+
+    :param array site_map: Site-resolution mutation map/ should represent
+        missing data as np.nan.
+    :param array elements: Array of starts/ends of constrained elements
+    :param array intervals: Windows in which to compute scales.
+    """ 
+    element_indicator = ~regions_to_mask(elements, L=len(site_map))
+    del_sites = np.zeros(len(intervals), np.int64)
+    scale = np.zeros(len(intervals), np.float64)
+    for ii, (start, end) in enumerate(intervals):
+        segment_indicator = element_indicator[start:end]
+        del_sites[ii] = np.sum(segment_indicator)
+        if del_sites[ii] == 0:
+            scale[ii] = np.nan
+            continue
+        segment_nans = np.isnan(site_map[start:end])
+        num_nans = np.count_nonzero(segment_nans)
+        if num_nans == end - start:
+            scale[ii] = 1
+        else:
+            segment = np.copy(site_map[start:end])
+            # The total mean is computed without imputation.
+            segment_mean = np.nanmean(segment) 
+            segment[segment_nans] = segment_mean
+            scale[ii] = np.mean(segment[segment_indicator]) / segment_mean
+    return del_sites, scale
+
+
+def compute_masked_scale(site_map, elements, intervals, mask_regions):
+    """
+    Compute mutation rate scales following the application of a genetic mask.
+    It is assumed that the mask excludes all sites with missing mutation rate
+    data.
+
+    :param array site_map: Site-resolution mutation map/ should represent
+        missing data as np.nan.
+    :param array elements: Array of starts/ends of constrained elements
+    :param array intervals: Windows in which to compute scales.
+    :param array mask_regions: Array of mask intervals
+    """
+    mask = regions_to_mask(mask_regions, L=len(site_map))
+    element_indicator = ~regions_to_mask(elements, L=len(site_map))
+    del_sites = np.zeros(len(intervals), np.int64)
+    scale = np.zeros(len(intervals), np.float64)
+    for ii, (start, end) in enumerate(intervals):
+        segment_indicator = element_indicator[start:end]
+        masked_indicator = np.logical_and(segment_indicator, ~mask[start:end])
+        del_sites[ii] = np.sum(masked_indicator)
+        if del_sites[ii] == 0:
+            scale[ii] = np.nan
+            continue
+        else:
+            segment = site_map[start:end]
+            segment_mean = np.mean(segment[~mask[start:end]])
+            scale[ii] = np.mean(segment[masked_indicator]) / segment_mean
+    return del_sites, scale
+
+
 def load_u_array(mut_tbl_file, masked=True):
     """
     Load mutation rates from a windowed mutation rate table. The following

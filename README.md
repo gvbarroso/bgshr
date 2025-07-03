@@ -57,11 +57,6 @@ the relevant gamma-distributed DFEs, which may include a point mass of neutral
 mutations.
 
 Example usage is shown in [human-chr22-example.ipynb](examples/human-chr22-example.ipynb).
-In models where constrained elements are very numerous, or many classes are to 
-be handled at once, prediction may be slow. We account for this by aggregating 
-elements into windows using functionality shown in 
-[human-chr22-arrays-example.ipynb](examples/human-chr22-arrays-example.ipynb)
-and performing calculations for all classes simaltaneously. 
 
 Current features:
 - Discretized gamma DFEs
